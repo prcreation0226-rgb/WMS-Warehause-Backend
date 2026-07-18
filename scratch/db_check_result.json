@@ -1,0 +1,571 @@
+{
+  "sales_orders": [
+    {
+      "Field": "id",
+      "Type": "int(11)",
+      "Null": "NO",
+      "Key": "PRI",
+      "Default": null,
+      "Extra": "auto_increment"
+    },
+    {
+      "Field": "company_id",
+      "Type": "int(11)",
+      "Null": "NO",
+      "Key": "MUL",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "order_number",
+      "Type": "varchar(255)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "customer_id",
+      "Type": "int(11)",
+      "Null": "YES",
+      "Key": "MUL",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "status",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "DRAFT",
+      "Extra": ""
+    },
+    {
+      "Field": "total_amount",
+      "Type": "decimal(12,2)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "0.00",
+      "Extra": ""
+    },
+    {
+      "Field": "created_by",
+      "Type": "int(11)",
+      "Null": "YES",
+      "Key": "MUL",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "created_at",
+      "Type": "datetime",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "updated_at",
+      "Type": "datetime",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "order_date",
+      "Type": "date",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "required_date",
+      "Type": "date",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "priority",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "MEDIUM",
+      "Extra": ""
+    },
+    {
+      "Field": "sales_channel",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "DIRECT",
+      "Extra": ""
+    },
+    {
+      "Field": "order_type",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "reference_number",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "notes",
+      "Type": "text",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "external_ref",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "parts",
+      "Type": "varchar(50)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "1of1",
+      "Extra": ""
+    },
+    {
+      "Field": "postcode",
+      "Type": "varchar(50)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "country",
+      "Type": "varchar(100)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "courier_name",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "courier_service",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "requested_shipping_service",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "required_despatch_date",
+      "Type": "date",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "required_delivery_date",
+      "Type": "date",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "no_of_parcels",
+      "Type": "int(11)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "1",
+      "Extra": ""
+    },
+    {
+      "Field": "total_weight",
+      "Type": "decimal(10,3)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "0.000",
+      "Extra": ""
+    },
+    {
+      "Field": "total_items",
+      "Type": "int(11)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "1",
+      "Extra": ""
+    },
+    {
+      "Field": "tracking_status",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "tracking_number",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "tags",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "batch_id",
+      "Type": "int(11)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "0",
+      "Extra": ""
+    },
+    {
+      "Field": "order_lock",
+      "Type": "tinyint(1)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "0",
+      "Extra": ""
+    },
+    {
+      "Field": "recipient_name",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "address_line1",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "address_line2",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "address_line3",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "town",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "county",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "phone",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "email",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    }
+  ],
+  "tables": [
+    {
+      "Tables_in_warehouse_wms": "audit_logs"
+    },
+    {
+      "Tables_in_warehouse_wms": "batches"
+    },
+    {
+      "Tables_in_warehouse_wms": "bundle_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "bundles"
+    },
+    {
+      "Tables_in_warehouse_wms": "categories"
+    },
+    {
+      "Tables_in_warehouse_wms": "companies"
+    },
+    {
+      "Tables_in_warehouse_wms": "customers"
+    },
+    {
+      "Tables_in_warehouse_wms": "cycle_counts"
+    },
+    {
+      "Tables_in_warehouse_wms": "goods_receipt_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "goods_receipts"
+    },
+    {
+      "Tables_in_warehouse_wms": "inventory"
+    },
+    {
+      "Tables_in_warehouse_wms": "inventory_adjustments"
+    },
+    {
+      "Tables_in_warehouse_wms": "inventory_logs"
+    },
+    {
+      "Tables_in_warehouse_wms": "locations"
+    },
+    {
+      "Tables_in_warehouse_wms": "movements"
+    },
+    {
+      "Tables_in_warehouse_wms": "notifications"
+    },
+    {
+      "Tables_in_warehouse_wms": "order_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "packing_tasks"
+    },
+    {
+      "Tables_in_warehouse_wms": "pick_list_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "pick_lists"
+    },
+    {
+      "Tables_in_warehouse_wms": "product_stocks"
+    },
+    {
+      "Tables_in_warehouse_wms": "production_formula_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "production_formulas"
+    },
+    {
+      "Tables_in_warehouse_wms": "production_order_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "production_orders"
+    },
+    {
+      "Tables_in_warehouse_wms": "products"
+    },
+    {
+      "Tables_in_warehouse_wms": "purchase_order_items"
+    },
+    {
+      "Tables_in_warehouse_wms": "purchase_orders"
+    },
+    {
+      "Tables_in_warehouse_wms": "replenishment_configs"
+    },
+    {
+      "Tables_in_warehouse_wms": "replenishment_tasks"
+    },
+    {
+      "Tables_in_warehouse_wms": "reports"
+    },
+    {
+      "Tables_in_warehouse_wms": "returns"
+    },
+    {
+      "Tables_in_warehouse_wms": "sales_orders"
+    },
+    {
+      "Tables_in_warehouse_wms": "saved_addresses"
+    },
+    {
+      "Tables_in_warehouse_wms": "shipments"
+    },
+    {
+      "Tables_in_warehouse_wms": "supplier_products"
+    },
+    {
+      "Tables_in_warehouse_wms": "suppliers"
+    },
+    {
+      "Tables_in_warehouse_wms": "users"
+    },
+    {
+      "Tables_in_warehouse_wms": "vat_codes"
+    },
+    {
+      "Tables_in_warehouse_wms": "warehouses"
+    },
+    {
+      "Tables_in_warehouse_wms": "zones"
+    }
+  ],
+  "saved_addresses": [
+    {
+      "Field": "id",
+      "Type": "int(11)",
+      "Null": "NO",
+      "Key": "PRI",
+      "Default": null,
+      "Extra": "auto_increment"
+    },
+    {
+      "Field": "company_id",
+      "Type": "int(11)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "recipient_name",
+      "Type": "varchar(255)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "address_line1",
+      "Type": "varchar(255)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "address_line2",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "address_line3",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "town",
+      "Type": "varchar(255)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "county",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "postcode",
+      "Type": "varchar(255)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "country",
+      "Type": "varchar(255)",
+      "Null": "NO",
+      "Key": "",
+      "Default": "UNITED KINGDOM",
+      "Extra": ""
+    },
+    {
+      "Field": "phone",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "email",
+      "Type": "varchar(255)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "created_at",
+      "Type": "datetime",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "updated_at",
+      "Type": "datetime",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    }
+  ]
+}

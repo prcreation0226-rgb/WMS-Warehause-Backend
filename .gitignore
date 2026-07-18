@@ -1,0 +1,12 @@
+node_modules/
+.env
+uploads/
+*.log
+db_clients_log.txt
+db_dump_debug.txt
+db_tables_log.txt
+db_users_log.txt
+debug_db_log.txt
+debug_output.txt
+diagnostics.txt
+products_debug.txt

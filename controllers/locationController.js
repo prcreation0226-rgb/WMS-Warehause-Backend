@@ -107,4 +107,14 @@ async function bulkAction(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, bulkUpload, bulkAction };
+async function getStock(req, res, next) {
+  try {
+    const data = await locationService.getLocationStockDetails(req.params.id, req.user);
+    res.json({ success: true, data });
+  } catch (err) {
+    if (err.message === 'Location not found') return res.status(404).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, bulkUpload, bulkAction, getStock };

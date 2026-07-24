@@ -200,6 +200,7 @@ ProductStock.belongsTo(Warehouse, { foreignKey: 'warehouseId' });
 ProductStock.belongsTo(Location, { foreignKey: 'locationId' });
 Location.hasMany(ProductStock, { foreignKey: 'locationId', onDelete: 'CASCADE', hooks: true });
 ProductStock.belongsTo(Customer, { foreignKey: 'clientId', as: 'Client' });
+ProductStock.belongsTo(User, { foreignKey: 'userId', as: 'User' });
 
 // InventoryAdjustment (createdBy -> User as createdByUser)
 Product.hasMany(InventoryAdjustment, { foreignKey: 'productId', onDelete: 'CASCADE', hooks: true });

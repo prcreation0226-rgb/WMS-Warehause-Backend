@@ -547,5 +547,271 @@ async function bulkAction(action, locationIds, reqUser) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, bulkCreate, bulkAction, migrateExistingLocations };
+async function getLocationStockDetails(locationId, reqUser) {
+  const locId = parseInt(locationId, 10);
+  const loc = await Location.findByPk(locId);
+  if (!loc) throw new Error('Location not found');
 
+  const locMatchCond = [
+    { locationId: locId },
+    { locationId: String(locId) }
+  ];
+  if (loc.name) locMatchCond.push({ locationId: loc.name });
+  if (loc.code) locMatchCond.push({ locationId: loc.code });
+
+  const whereLoc = { [Op.or]: locMatchCond };
+  const list = [];
+  const seenKeys = new Set();
+
+  // 1. Fetch physical stock rows from ProductStock
+  try {
+    const stocks = await ProductStock.findAll({
+      where: whereLoc,
+      include: [
+        {
+          association: 'Product',
+          attributes: ['id', 'name', 'sku'],
+          required: false,
+          include: [{ association: 'Client', attributes: ['id', 'name', 'code'], required: false }]
+        },
+        {
+          association: 'Client',
+          attributes: ['id', 'name', 'code'],
+          required: false
+        },
+        {
+          association: 'User',
+          attributes: ['id', 'name', 'email'],
+          required: false
+        }
+      ],
+      order: [['updatedAt', 'DESC']]
+    });
+
+    stocks.forEach(st => {
+      const s = st.get ? st.get({ plain: true }) : st;
+      const clientCode = s.Client?.code || s.Client?.name || s.Product?.Client?.code || s.Product?.Client?.name || 'FFD';
+      const productSku = s.Product?.sku || 'N/A';
+      const productName = s.Product?.name || '';
+      const productDisplay = productName ? `${productSku} - ${productName}` : productSku;
+      const type = (s.reserved > 0) ? 'Allocation' : 'Storage';
+      const bestBefore = s.bestBeforeDate ? `${s.bestBeforeDate} 00:00:00` : 'N/A';
+      const batchNo = s.batchNumber || s.lotNumber || 'N/A';
+      const serialNo = s.serialNumber || 'N/A';
+      const allocatedAgainstOrder = (s.reserved > 0) ? 'true' : 'false';
+      const lastUpdatedByUser = s.User?.name || s.User?.email || s.reason || 'SYSTEM';
+
+      const dedupKey = `${productSku}_${batchNo}_${bestBefore}_${s.quantity}`;
+      seenKeys.add(dedupKey);
+
+      list.push({
+        id: `stock_${s.id}`,
+        client: clientCode,
+        product: productDisplay,
+        type,
+        bestBefore,
+        batchNo,
+        serialNo,
+        quantity: Math.round(Number(s.quantity) || 0),
+        allocatedAgainstOrder,
+        lastUpdated: s.updatedAt,
+        lastUpdatedByUser
+      });
+    });
+  } catch (err) {
+    console.error('[getLocationStockDetails] ProductStock query error:', err.message);
+  }
+
+  // 2. Fetch allocated OrderItems assigned to this location
+  try {
+    const orderItems = await OrderItem.findAll({
+      where: whereLoc,
+      include: [
+        {
+          association: 'Product',
+          attributes: ['id', 'name', 'sku'],
+          required: false,
+          include: [{ association: 'Client', attributes: ['id', 'name', 'code'], required: false }]
+        },
+        {
+          association: 'SalesOrder',
+          required: false,
+          include: [{ association: 'Client', attributes: ['id', 'name', 'code'], required: false }]
+        }
+      ],
+      order: [['updatedAt', 'DESC']]
+    });
+
+    orderItems.forEach(item => {
+      const i = item.get ? item.get({ plain: true }) : item;
+      const clientCode = i.SalesOrder?.Client?.code || i.Product?.Client?.code || 'FFD';
+      const productSku = i.Product?.sku || 'N/A';
+      const productName = i.Product?.name || '';
+      const productDisplay = productName ? `${productSku} - ${productName}` : productSku;
+      const bestBefore = i.bestBeforeDate ? `${i.bestBeforeDate} 00:00:00` : 'N/A';
+      const batchNo = i.batchNumber || 'N/A';
+      const quantity = Math.round(parseFloat(i.quantity) || 0);
+
+      list.push({
+        id: `order_item_${i.id}`,
+        client: clientCode,
+        product: productDisplay,
+        type: 'Allocation',
+        bestBefore,
+        batchNo,
+        serialNo: 'N/A',
+        quantity,
+        allocatedAgainstOrder: 'true',
+        lastUpdated: i.updatedAt,
+        lastUpdatedByUser: 'SYSTEM-SHOPIFY'
+      });
+    });
+  } catch (err) {
+    console.error('[getLocationStockDetails] OrderItem query error:', err.message);
+  }
+
+  // 3. Fetch allocated PickListItems assigned to this location
+  try {
+    const { PickListItem } = require('../models');
+    if (PickListItem) {
+      const pickItems = await PickListItem.findAll({
+        where: whereLoc,
+        include: [
+          {
+            association: 'Product',
+            attributes: ['id', 'name', 'sku'],
+            required: false,
+            include: [{ association: 'Client', attributes: ['id', 'name', 'code'], required: false }]
+          }
+        ],
+        order: [['updatedAt', 'DESC']]
+      });
+
+      pickItems.forEach(item => {
+        const p = item.get ? item.get({ plain: true }) : item;
+        const clientCode = p.Product?.Client?.code || 'FFD';
+        const productSku = p.Product?.sku || 'N/A';
+        const productName = p.Product?.name || '';
+        const productDisplay = productName ? `${productSku} - ${productName}` : productSku;
+        const bestBefore = p.bestBeforeDate ? `${p.bestBeforeDate} 00:00:00` : 'N/A';
+        const batchNo = p.batchNumber || 'N/A';
+        const quantity = parseFloat(p.pickedQty || p.requestedQty || p.quantity || 0);
+
+        const dedupKey = `pick_${p.id}`;
+        if (!seenKeys.has(dedupKey) && quantity > 0) {
+          list.push({
+            id: dedupKey,
+            client: clientCode,
+            product: productDisplay,
+            type: 'Allocation',
+            bestBefore,
+            batchNo,
+            serialNo: 'N/A',
+            quantity,
+            allocatedAgainstOrder: 'true',
+            lastUpdated: p.updatedAt,
+            lastUpdatedByUser: 'SYSTEM-SHOPIFY'
+          });
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[getLocationStockDetails] PickListItem query error:', err.message);
+  }
+
+  // 4. GoodsReceiptItem
+  try {
+    const { GoodsReceiptItem } = require('../models');
+    if (GoodsReceiptItem) {
+      const grItems = await GoodsReceiptItem.findAll({
+        where: whereLoc,
+        include: [
+          {
+            association: 'Product',
+            attributes: ['id', 'name', 'sku'],
+            required: false,
+            include: [{ association: 'Client', attributes: ['id', 'name', 'code'], required: false }]
+          }
+        ],
+        order: [['updatedAt', 'DESC']]
+      });
+
+      grItems.forEach(item => {
+        const g = item.get ? item.get({ plain: true }) : item;
+        const productSku = g.Product?.sku || 'N/A';
+        const productName = g.Product?.name || '';
+        const productDisplay = productName ? `${productSku} - ${productName}` : productSku;
+        const qty = parseFloat(g.receivedQty || g.qtyToBook || g.expectedQty || 0);
+
+        const dedupKey = `gr_${g.id}`;
+        if (!seenKeys.has(dedupKey) && qty > 0) {
+          list.push({
+            id: dedupKey,
+            client: g.Product?.Client?.code || 'FFD',
+            product: productDisplay,
+            type: 'Storage',
+            bestBefore: g.bestBeforeDate ? `${g.bestBeforeDate} 00:00:00` : 'N/A',
+            batchNo: g.batchNumber || 'N/A',
+            serialNo: 'N/A',
+            quantity: qty,
+            allocatedAgainstOrder: 'false',
+            lastUpdated: g.updatedAt,
+            lastUpdatedByUser: 'SYSTEM-RECEIVING'
+          });
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[getLocationStockDetails] GoodsReceiptItem query error:', err.message);
+  }
+
+  // 5. InventoryAdjustment
+  try {
+    const { InventoryAdjustment } = require('../models');
+    if (InventoryAdjustment) {
+      const adjustments = await InventoryAdjustment.findAll({
+        where: whereLoc,
+        include: [
+          {
+            association: 'Product',
+            attributes: ['id', 'name', 'sku'],
+            required: false,
+            include: [{ association: 'Client', attributes: ['id', 'name', 'code'], required: false }]
+          }
+        ],
+        order: [['updatedAt', 'DESC']]
+      });
+
+      adjustments.forEach(adj => {
+        const a = adj.get ? adj.get({ plain: true }) : adj;
+        const productSku = a.Product?.sku || 'N/A';
+        const productName = a.Product?.name || '';
+        const productDisplay = productName ? `${productSku} - ${productName}` : productSku;
+        const qty = parseFloat(a.quantity || a.newQuantity || 0);
+
+        const dedupKey = `adj_${a.id}`;
+        if (!seenKeys.has(dedupKey) && qty > 0) {
+          list.push({
+            id: dedupKey,
+            client: a.Product?.Client?.code || 'FFD',
+            product: productDisplay,
+            type: 'Storage',
+            bestBefore: a.bestBeforeDate ? `${a.bestBeforeDate} 00:00:00` : 'N/A',
+            batchNo: a.batchNumber || 'N/A',
+            serialNo: 'N/A',
+            quantity: qty,
+            allocatedAgainstOrder: 'false',
+            lastUpdated: a.updatedAt,
+            lastUpdatedByUser: a.createdByUser?.name || a.createdByUser?.email || 'SYSTEM'
+          });
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[getLocationStockDetails] InventoryAdjustment query error:', err.message);
+  }
+
+  return list;
+}
+
+module.exports = { list, getById, create, update, remove, bulkCreate, bulkAction, migrateExistingLocations, getLocationStockDetails };

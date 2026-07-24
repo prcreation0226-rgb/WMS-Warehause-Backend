@@ -9,7 +9,7 @@ async function list(reqUser, query = {}) {
   if (query.deliveryStatus) where.deliveryStatus = query.deliveryStatus;
   const shipments = await Shipment.findAll({
     where,
-    order: [['createdAt', 'DESC']],
+    order: [['id', 'DESC']],
     include: [
       { association: 'SalesOrder', include: ['Client'] },
       { association: 'Company', attributes: ['id', 'name', 'code'] },

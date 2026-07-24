@@ -33,7 +33,7 @@ async function list(reqUser, query = {}) {
   }
   const pickLists = await PickList.findAll({
     where,
-    order: [['createdAt', 'DESC']],
+    order: [['id', 'DESC']],
     include: [
       orderInclude,
       { association: 'Warehouse', attributes: ['id', 'name'] },

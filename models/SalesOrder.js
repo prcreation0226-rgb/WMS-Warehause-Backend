@@ -55,7 +55,13 @@ const SalesOrder = sequelize.define('SalesOrder', {
   town: { type: DataTypes.STRING, allowNull: true },
   county: { type: DataTypes.STRING, allowNull: true },
   phone: { type: DataTypes.STRING, allowNull: true },
-  email: { type: DataTypes.STRING, allowNull: true }
+  email: { type: DataTypes.STRING, allowNull: true },
+
+  // ShipStation API v2 & Packing Workflow fields
+  shipstationOrderId: { type: DataTypes.STRING, allowNull: true, field: 'shipstation_order_id' },
+  shipstationStoreId: { type: DataTypes.STRING, allowNull: true, field: 'shipstation_store_id' },
+  checkContentRequired: { type: DataTypes.BOOLEAN, defaultValue: true, field: 'check_content_required' },
+  isBundle: { type: DataTypes.BOOLEAN, defaultValue: false, field: 'is_bundle' }
 }, {
   tableName: 'sales_orders',
   timestamps: true,

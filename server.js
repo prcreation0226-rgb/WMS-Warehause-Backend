@@ -336,6 +336,14 @@ async function start() {
         { t: 'order_items', c: 'vat_amount', type: 'DECIMAL(12, 2)' },
         { t: 'sales_orders', c: 'net_amount', type: 'DECIMAL(12, 2)' },
         { t: 'sales_orders', c: 'vat_amount', type: 'DECIMAL(12, 2)' },
+        { t: 'sales_orders', c: 'shipstation_order_id', type: 'VARCHAR(255)' },
+        { t: 'sales_orders', c: 'shipstation_store_id', type: 'VARCHAR(255)' },
+        { t: 'sales_orders', c: 'check_content_required', type: 'TINYINT(1) DEFAULT 1' },
+        { t: 'sales_orders', c: 'is_bundle', type: 'TINYINT(1) DEFAULT 0' },
+        { t: 'order_items', c: 'scanned_qty', type: 'INT DEFAULT 0' },
+        { t: 'order_items', c: 'is_bundle_parent', type: 'TINYINT(1) DEFAULT 0' },
+        { t: 'order_items', c: 'bundle_header', type: 'VARCHAR(255)' },
+        { t: 'order_items', c: 'product_image_url', type: 'TEXT' },
       ];
       for (const col of manualCols) {
         try {

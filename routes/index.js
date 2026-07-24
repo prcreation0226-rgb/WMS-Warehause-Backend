@@ -54,6 +54,7 @@ router.use('/api/replenishment', replenishmentRoutes);
 router.use('/api/returns', returnRoutes);
 router.use('/api/vat-codes', vatCodeRoutes);
 router.use('/api/integrations', integrationRoutes);
+router.use('/api/shipstation', require('../modules/integrations/shipstation.routes'));
 const multer = require('multer');
 const path = require('path');
 let cloudinary;

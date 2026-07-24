@@ -76,7 +76,7 @@ async function list(reqUser, query = {}) {
 
   const { rows, count } = await SalesOrder.findAndCountAll({
     where,
-    order: [['createdAt', 'DESC']],
+    order: [['id', 'DESC']],
     include: [
       { association: 'Company', attributes: ['id', 'name', 'code'] },
       { association: 'Client', attributes: ['id', 'name', 'code', 'email', 'phone', 'contactPerson', 'address', 'city', 'state', 'country', 'postcode', 'header_image_url'] },

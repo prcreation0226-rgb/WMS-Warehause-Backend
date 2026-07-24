@@ -57,4 +57,52 @@ async function rejectAssignment(req, res, next) {
   }
 }
 
-module.exports = { list, getById, assignPacker, completePacking, startPacking, rejectAssignment };
+async function scanOrderByBarcode(req, res, next) {
+  try {
+    const data = await packingService.getPackingScanOrderByBarcode(req.params.barcode, req.user);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(404).json({ success: false, message: err.message });
+  }
+}
+
+async function toggleCheck(req, res, next) {
+  try {
+    const data = await packingService.toggleCheckOrderContent(req.params.id, req.body.checkContentRequired);
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function scanItem(req, res, next) {
+  try {
+    const data = await packingService.scanPackingItem(req.params.id, req.body.skuOrBarcode);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+async function dispatchOrder(req, res, next) {
+  try {
+    const forceOverride = Boolean(req.body.forceOverride);
+    const data = await packingService.dispatchPackingOrder(req.params.id, req.user, forceOverride);
+    res.json(data);
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+module.exports = {
+  list,
+  getById,
+  assignPacker,
+  completePacking,
+  startPacking,
+  rejectAssignment,
+  scanOrderByBarcode,
+  toggleCheck,
+  scanItem,
+  dispatchOrder
+};

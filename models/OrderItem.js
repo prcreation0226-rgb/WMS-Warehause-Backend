@@ -15,6 +15,12 @@ const OrderItem = sequelize.define('OrderItem', {
   locationId: { type: DataTypes.INTEGER, allowNull: true },
   batchNumber: { type: DataTypes.STRING, allowNull: true },
   bestBeforeDate: { type: DataTypes.DATEONLY, allowNull: true },
+  
+  // Packing & Bundle fields
+  scannedQty: { type: DataTypes.INTEGER, defaultValue: 0, field: 'scanned_qty' },
+  isBundleParent: { type: DataTypes.BOOLEAN, defaultValue: false, field: 'is_bundle_parent' },
+  bundleHeader: { type: DataTypes.STRING, allowNull: true, field: 'bundle_header' },
+  productImageUrl: { type: DataTypes.TEXT, allowNull: true, field: 'product_image_url' },
 }, {
   tableName: 'order_items',
   timestamps: true,

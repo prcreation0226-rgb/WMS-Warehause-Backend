@@ -20,7 +20,7 @@ async function list(reqUser, query = {}) {
 
   const tasks = await PackingTask.findAll({
     where,
-    order: [['createdAt', 'DESC']],
+    order: [['id', 'DESC']],
     include: [
       {
         association: 'SalesOrder',
@@ -173,4 +173,145 @@ async function rejectAssignment(id, reqUser) {
   return { id: parseInt(id), status: 'NOT_STARTED', assignedTo: null, success: true };
 }
 
-module.exports = { list, getById, assignPacker, startPacking, completePacking, rejectAssignment };
+async function getPackingScanOrderByBarcode(barcode, reqUser) {
+  const cleanBarcode = String(barcode).trim();
+  const where = {
+    [Op.or]: [
+      { orderNumber: cleanBarcode },
+      { orderNumber: { [Op.like]: `%${cleanBarcode}%` } },
+      { shipstationOrderId: cleanBarcode },
+      { externalRef: cleanBarcode }
+    ]
+  };
+  if (reqUser.role !== 'super_admin' && reqUser.companyId) {
+    where.companyId = reqUser.companyId;
+  }
+
+  let order = await SalesOrder.findOne({
+    where,
+    include: [
+      {
+        association: 'OrderItems',
+        include: ['Product']
+      },
+      'Client'
+    ]
+  });
+
+  if (!order && !isNaN(cleanBarcode)) {
+    const pkWhere = { id: parseInt(cleanBarcode) };
+    if (reqUser.role !== 'super_admin' && reqUser.companyId) {
+      pkWhere.companyId = reqUser.companyId;
+    }
+    order = await SalesOrder.findOne({
+      where: pkWhere,
+      include: [
+        { association: 'OrderItems', include: ['Product'] },
+        'Client'
+      ]
+    });
+  }
+
+  if (!order) throw new Error('Sales order not found for barcode: ' + barcode);
+
+  // Format order items for 3x5 grid
+  const items = order.OrderItems.map(item => {
+    const p = item.Product || {};
+    return {
+      id: item.id,
+      productId: item.productId,
+      name: p.name || item.bundleHeader || 'Product ' + item.productId,
+      sku: p.sku || 'N/A',
+      barcode: p.barcode || p.sku || '',
+      quantity: item.quantity || 1,
+      scannedQty: item.scannedQty || 0,
+      bestBeforeDate: item.bestBeforeDate || p.bestBeforeDate || '31-May-2027',
+      batchNumber: item.batchNumber || p.batchNumber || 'N/A',
+      productImageUrl: item.productImageUrl || p.imageUrl || null,
+      isBundleParent: item.isBundleParent || false,
+      bundleHeader: item.bundleHeader || null
+    };
+  });
+
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    shipstationOrderId: order.shipstationOrderId,
+    checkContentRequired: order.checkContentRequired !== false,
+    isBundle: order.isBundle || false,
+    status: order.status,
+    items
+  };
+}
+
+async function toggleCheckOrderContent(orderId, checkContentRequired) {
+  const order = await SalesOrder.findByPk(orderId);
+  if (!order) throw new Error('Sales order not found');
+  await order.update({ checkContentRequired: Boolean(checkContentRequired) });
+  return { id: order.id, checkContentRequired: order.checkContentRequired };
+}
+
+async function scanPackingItem(orderId, skuOrBarcode) {
+  const order = await SalesOrder.findByPk(orderId, {
+    include: [{ association: 'OrderItems', include: ['Product'] }]
+  });
+  if (!order) throw new Error('Sales order not found');
+
+  const cleanQuery = String(skuOrBarcode).trim().toLowerCase();
+
+  // Find matching item by SKU or Barcode
+  let targetItem = order.OrderItems.find(item => {
+    const p = item.Product || {};
+    return (
+      (p.sku && p.sku.toLowerCase() === cleanQuery) ||
+      (p.barcode && p.barcode.toLowerCase() === cleanQuery) ||
+      String(item.id) === cleanQuery
+    );
+  });
+
+  if (!targetItem && order.OrderItems.length > 0) {
+    // Fallback: match substring or pick first pending item if exact match not found
+    targetItem = order.OrderItems.find(item => {
+      const p = item.Product || {};
+      return (p.name && p.name.toLowerCase().includes(cleanQuery));
+    }) || order.OrderItems.find(item => (item.scannedQty || 0) < item.quantity);
+  }
+
+  if (!targetItem) {
+    throw new Error('Item not found in this order: ' + skuOrBarcode);
+  }
+
+  const currentScanned = targetItem.scannedQty || 0;
+  const isOverScan = currentScanned >= targetItem.quantity;
+  const newScanned = currentScanned + 1;
+
+  await targetItem.update({ scannedQty: newScanned });
+
+  return {
+    success: true,
+    itemId: targetItem.id,
+    scannedQty: newScanned,
+    quantity: targetItem.quantity,
+    isComplete: newScanned === targetItem.quantity,
+    isOverScan,
+    warning: isOverScan ? 'Extra scan detected! Please check picked quantity.' : null
+  };
+}
+
+async function dispatchPackingOrder(orderId, reqUser, forceOverride = false) {
+  const shipstationService = require('../modules/integrations/shipstation.service');
+  return await shipstationService.createShippingLabelAndDispatch(orderId, reqUser, forceOverride);
+}
+
+module.exports = {
+  list,
+  getById,
+  assignPacker,
+  startPacking,
+  completePacking,
+  rejectAssignment,
+  getPackingScanOrderByBarcode,
+  toggleCheckOrderContent,
+  scanPackingItem,
+  dispatchPackingOrder
+};

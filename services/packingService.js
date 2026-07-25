@@ -192,21 +192,7 @@ function firstProductImage(images) {
   return null;
 }
 
-function getFallbackProductImage(name, sku) {
-  const text = (String(name || '') + ' ' + String(sku || '')).toLowerCase();
 
-  if (text.includes('nut') || text.includes('cashew') || text.includes('peanut') || text.includes('almond') || text.includes('seed')) {
-    return 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?w=400&auto=format&fit=crop&q=80';
-  }
-  if (text.includes('chocolate') || text.includes('biscoff') || text.includes('flapjack') || text.includes('sweet') || text.includes('sauce') || text.includes('syrup')) {
-    return 'https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?w=400&auto=format&fit=crop&q=80';
-  }
-  if (text.includes('fruit') || text.includes('date') || text.includes('cherry') || text.includes('fig') || text.includes('berry')) {
-    return 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=400&auto=format&fit=crop&q=80';
-  }
-
-  return 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=400&auto=format&fit=crop&q=80';
-}
 
 async function getPackingScanOrderByBarcode(barcode, reqUser) {
   if (!barcode) throw new Error('Order barcode required');
@@ -251,25 +237,12 @@ async function getPackingScanOrderByBarcode(barcode, reqUser) {
 
   if (!order) throw new Error('Sales order not found for barcode: ' + barcode);
 
-  // Format order items for Packing Desk and backfill missing image URLs in DB
+  // Format order items for Packing Desk and fetch dynamic product images from DB/API
   const items = await Promise.all(order.OrderItems.map(async item => {
     const p = item.Product || {};
-    let img = item.productImageUrl || p.imageUrl || p.image || firstProductImage(p.images) || null;
+    const img = item.productImageUrl || p.imageUrl || p.image || firstProductImage(p.images) || null;
 
-    // Fallback: If image URL is still missing in DB, generate product category image & backfill
-    if (!img) {
-      img = getFallbackProductImage(p.name || item.name || '', p.sku || item.sku || '');
-      
-      try {
-        const { Product } = require('../models');
-        if (p && p.id) {
-          await Product.update({ images: [img] }, { where: { id: p.id } });
-        }
-        await item.update({ productImageUrl: img });
-      } catch (e) {
-        console.warn('[Image Backfill Warning]:', e.message);
-      }
-    } else if (!item.productImageUrl && img) {
+    if (!item.productImageUrl && img) {
       try {
         await item.update({ productImageUrl: img });
       } catch (e) {

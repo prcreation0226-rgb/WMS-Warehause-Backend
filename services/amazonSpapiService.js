@@ -134,14 +134,19 @@ class AmazonSpapiService {
                 transaction
               });
 
+              const amznImg = item.ProductInfo?.SmallImage?.URL || item.ItemImage || item.ImageUrl || item.image || null;
+
               if (!wmsProduct) {
                 wmsProduct = await Product.create({
                   companyId,
                   sku: sku.trim(),
                   name: item.Title || `Imported Amazon Product - ${sku.trim()}`,
                   price: item.ItemPrice?.Amount || 0,
-                  status: 'ACTIVE'
+                  status: 'ACTIVE',
+                  images: amznImg ? [amznImg] : null
                 }, { transaction });
+              } else if (amznImg && (!wmsProduct.images || wmsProduct.images.length === 0) && !wmsProduct.imageUrl) {
+                await wmsProduct.update({ images: [amznImg] }, { transaction });
               }
 
               await OrderItem.create({
@@ -152,7 +157,8 @@ class AmazonSpapiService {
                 netPrice: (item.ItemPrice?.Amount || 0),
                 grossPrice: (item.ItemPrice?.Amount || 0),
                 vatRate: 0,
-                vatAmount: item.ItemTax?.Amount || 0
+                vatAmount: item.ItemTax?.Amount || 0,
+                productImageUrl: amznImg || (wmsProduct.images ? (Array.isArray(wmsProduct.images) ? wmsProduct.images[0] : wmsProduct.images) : null)
               }, { transaction });
             }
             await transaction.commit();

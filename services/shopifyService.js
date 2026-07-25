@@ -169,14 +169,19 @@ class ShopifyService {
               transaction
             });
 
+            const shopifyImg = item.image?.src || item.featured_image?.url || item.picture_url || item.imageUrl || null;
+
             if (!wmsProduct) {
               wmsProduct = await Product.create({
                 companyId,
                 sku: (item.sku || '').trim(),
                 name: item.title || item.name || `Imported Product - ${(item.sku || '').trim()}`,
                 price: item.price || 0,
-                status: 'ACTIVE'
+                status: 'ACTIVE',
+                images: shopifyImg ? [shopifyImg] : null
               }, { transaction });
+            } else if (shopifyImg && (!wmsProduct.images || wmsProduct.images.length === 0) && !wmsProduct.imageUrl) {
+              await wmsProduct.update({ images: [shopifyImg] }, { transaction });
             }
 
             await OrderItem.create({
@@ -186,8 +191,9 @@ class ShopifyService {
               unitPrice: item.price || 0,
               netPrice: (item.price || 0) * item.quantity,
               grossPrice: (item.price || 0) * item.quantity,
-              vatRate: 0, // Set defaults or fetch according to company tax rules
-              vatAmount: 0
+              vatRate: 0,
+              vatAmount: 0,
+              productImageUrl: shopifyImg || (wmsProduct.images ? (Array.isArray(wmsProduct.images) ? wmsProduct.images[0] : wmsProduct.images) : null)
             }, { transaction });
           }
 

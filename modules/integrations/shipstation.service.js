@@ -24,6 +24,81 @@ async function getShipStationConfig(companyId) {
   return { apiKey, apiSecret, baseUrl: SHIPSTATION_V2_BASE_URL };
 }
 
+function firstProductImage(images) {
+  if (images == null || images === '') return null;
+  let list = images;
+  if (typeof images === 'string') {
+    const s = images.trim();
+    if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/')) {
+      return s;
+    }
+    if (s.startsWith('[')) {
+      try { list = JSON.parse(s); } catch (e) { list = [s]; }
+    } else if (s.includes(',')) {
+      list = s.split(',').map(x => x.trim()).filter(Boolean);
+    } else {
+      list = [s];
+    }
+  }
+  if (Array.isArray(list) && list.length > 0) {
+    return list[0];
+  }
+  return null;
+}
+
+function extractProductImage(item, product) {
+  let img = null;
+  if (item) {
+    img = item.imageUrl || item.image_url || item.pictureUrl || item.thumbnailUrl || item.thumbUrl || item.productImageUrl || item.image;
+    if (!img && item.options && Array.isArray(item.options)) {
+      const imgOpt = item.options.find(o => o.name && o.name.toLowerCase().includes('image'));
+      if (imgOpt && imgOpt.value) img = imgOpt.value;
+    }
+  }
+  if (!img && product) {
+    img = product.imageUrl || product.image || firstProductImage(product.images);
+  }
+  return img || null;
+}
+
+async function getOrCreateProductFromChannelItem(item, companyId, productImageUrl) {
+  if (!item || !item.sku) return null;
+  const sku = String(item.sku).trim();
+  if (!sku) return null;
+
+  let product = await Product.findOne({ where: { sku, companyId: companyId || 1 } });
+
+  if (!product) {
+    const name = item.name || item.title || item.label || sku;
+    const barcode = item.upc || item.barcode || item.gtin || sku;
+    const price = item.unitPrice || item.price || 0;
+    const imagesList = productImageUrl ? [productImageUrl] : null;
+
+    try {
+      product = await Product.create({
+        companyId: companyId || 1,
+        name,
+        sku,
+        barcode,
+        price,
+        status: 'ACTIVE',
+        images: imagesList
+      });
+      console.log(`[Auto Product Create] Created new product in WMS: ${sku} - ${name}`);
+    } catch (err) {
+      console.error(`[Auto Product Create Error] SKU ${sku}:`, err.message);
+    }
+  } else if (productImageUrl && (!product.images || product.images.length === 0) && !product.imageUrl) {
+    try {
+      await product.update({ images: [productImageUrl] });
+    } catch (e) {
+      // Ignore update error
+    }
+  }
+
+  return product;
+}
+
 /**
  * Sync Orders from ShipStation API v2 (No PII: Store only Order ID, SKUs, Qty, Metadata)
  */
@@ -74,10 +149,15 @@ async function syncOrdersFromShipStation(companyId) {
           let hasBundle = false;
           for (const item of ssOrder.items) {
             const sku = item.sku;
-            const product = await Product.findOne({ where: { sku, companyId: companyId || 1 } });
+            const productImageUrl = extractProductImage(item, null);
+
+            // Auto-create or fetch product from WMS catalog
+            const product = await getOrCreateProductFromChannelItem(item, companyId || 1, productImageUrl);
             
             const isBundleItem = item.sku && item.sku.includes('SEL_'); // Bundle SKU pattern
             if (isBundleItem) hasBundle = true;
+
+            const finalImg = productImageUrl || (product ? firstProductImage(product.images) : null);
 
             await OrderItem.create({
               salesOrderId: existingOrder.id,
@@ -87,7 +167,7 @@ async function syncOrdersFromShipStation(companyId) {
               unitPrice: item.unitPrice || 0,
               bundleHeader: isBundleItem ? `${item.quantity} x ${item.sku}` : null,
               isBundleParent: isBundleItem,
-              productImageUrl: item.imageUrl || product?.imageUrl || null,
+              productImageUrl: finalImg,
               bestBeforeDate: item.options?.find(o => o.name === 'BB Date')?.value || null,
               batchNumber: item.options?.find(o => o.name === 'Batch ID')?.value || null
             });

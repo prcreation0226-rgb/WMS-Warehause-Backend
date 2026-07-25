@@ -142,14 +142,19 @@ class EbayService {
                 transaction
               });
 
+              const ebayImg = item.image?.imageUrl || item.itemLocation?.imageUrl || item.imageUrl || item.pictureUrl || null;
+
               if (!wmsProduct) {
                 wmsProduct = await Product.create({
                   companyId,
                   sku: (item.sku || '').trim(),
                   name: item.title || `Imported eBay Product - ${(item.sku || '').trim()}`,
                   price: item.lineItemCost?.value || 0,
-                  status: 'ACTIVE'
+                  status: 'ACTIVE',
+                  images: ebayImg ? [ebayImg] : null
                 }, { transaction });
+              } else if (ebayImg && (!wmsProduct.images || wmsProduct.images.length === 0) && !wmsProduct.imageUrl) {
+                await wmsProduct.update({ images: [ebayImg] }, { transaction });
               }
 
               await OrderItem.create({
@@ -160,7 +165,8 @@ class EbayService {
                 netPrice: (item.lineItemCost?.value || 0) * item.quantity,
                 grossPrice: (item.lineItemCost?.value || 0) * item.quantity,
                 vatRate: 0,
-                vatAmount: 0
+                vatAmount: 0,
+                productImageUrl: ebayImg || (wmsProduct.images ? (Array.isArray(wmsProduct.images) ? wmsProduct.images[0] : wmsProduct.images) : null)
               }, { transaction });
             }
             await transaction.commit();

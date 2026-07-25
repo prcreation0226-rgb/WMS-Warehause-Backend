@@ -173,7 +173,28 @@ async function rejectAssignment(id, reqUser) {
   return { id: parseInt(id), status: 'NOT_STARTED', assignedTo: null, success: true };
 }
 
+function firstProductImage(images) {
+  if (images == null || images === '') return null;
+  let list = images;
+  if (typeof images === 'string') {
+    const s = images.trim();
+    if (s.startsWith('[')) {
+      try { list = JSON.parse(s); } catch (e) { list = [s]; }
+    } else if (s.includes(',')) {
+      list = s.split(',').map(x => x.trim()).filter(Boolean);
+    } else {
+      list = [s];
+    }
+  }
+  if (Array.isArray(list) && list.length > 0) {
+    return list[0];
+  }
+  return null;
+}
+
 async function getPackingScanOrderByBarcode(barcode, reqUser) {
+  if (!barcode) throw new Error('Order barcode required');
+
   const cleanBarcode = String(barcode).trim();
   const where = {
     [Op.or]: [
@@ -217,17 +238,18 @@ async function getPackingScanOrderByBarcode(barcode, reqUser) {
   // Format order items for 3x5 grid
   const items = order.OrderItems.map(item => {
     const p = item.Product || {};
+    const img = item.productImageUrl || p.imageUrl || p.image || firstProductImage(p.images) || null;
     return {
       id: item.id,
       productId: item.productId,
       name: p.name || item.bundleHeader || 'Product ' + item.productId,
-      sku: p.sku || 'N/A',
-      barcode: p.barcode || p.sku || '',
+      sku: p.sku || item.sku || 'N/A',
+      barcode: p.barcode || p.sku || item.barcode || item.sku || '',
       quantity: item.quantity || 1,
       scannedQty: item.scannedQty || 0,
       bestBeforeDate: item.bestBeforeDate || p.bestBeforeDate || '31-May-2027',
       batchNumber: item.batchNumber || p.batchNumber || 'N/A',
-      productImageUrl: item.productImageUrl || p.imageUrl || null,
+      productImageUrl: img,
       isBundleParent: item.isBundleParent || false,
       bundleHeader: item.bundleHeader || null
     };

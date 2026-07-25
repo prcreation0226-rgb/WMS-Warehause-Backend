@@ -194,6 +194,13 @@ function firstProductImage(images) {
 
 
 
+function cleanImageUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (trimmed.includes('unsplash.com')) return null;
+  return trimmed;
+}
+
 async function getPackingScanOrderByBarcode(barcode, reqUser) {
   if (!barcode) throw new Error('Order barcode required');
 
@@ -240,7 +247,20 @@ async function getPackingScanOrderByBarcode(barcode, reqUser) {
   // Format order items for Packing Desk and fetch dynamic product images from DB/API
   const items = await Promise.all(order.OrderItems.map(async item => {
     const p = item.Product || {};
-    const img = item.productImageUrl || p.imageUrl || p.image || firstProductImage(p.images) || null;
+    let rawImg = item.productImageUrl || p.imageUrl || p.image || firstProductImage(p.images) || null;
+    let img = cleanImageUrl(rawImg);
+
+    // Auto-clean old unsplash static URLs stored in DB
+    if (item.productImageUrl && item.productImageUrl.includes('unsplash.com')) {
+      try {
+        await item.update({ productImageUrl: null });
+      } catch (e) {}
+    }
+    if (p && p.id && p.images && JSON.stringify(p.images).includes('unsplash.com')) {
+      try {
+        await Product.update({ images: null }, { where: { id: p.id } });
+      } catch (e) {}
+    }
 
     if (!item.productImageUrl && img) {
       try {

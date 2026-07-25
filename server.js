@@ -358,6 +358,10 @@ async function start() {
           }
         }
       }
+      try {
+        await sequelize.query(`UPDATE order_items SET product_image_url = NULL WHERE product_image_url LIKE '%unsplash.com%'`);
+        await sequelize.query(`UPDATE products SET images = NULL WHERE CAST(images AS CHAR) LIKE '%unsplash.com%'`);
+      } catch (e) {}
       if (dialect === 'mysql') {
         const manualAlters = [
           { t: 'goods_receipts', c: 'total_expected', type: 'DECIMAL(12, 3)' },

@@ -18,18 +18,66 @@ class AmazonSpapiService {
    * Helper to retrieve access token using SP-API OAuth credentials
    */
   static async getAccessToken(clientId, clientSecret, refreshToken) {
+    const cleanClientId = (clientId || '').trim();
+    const cleanClientSecret = (clientSecret || '').trim();
+    const cleanRefreshToken = (refreshToken || '').trim();
+
+    console.log(`[Amazon SP-API] LWA Attempt -> Client ID: ${cleanClientId} | RefreshToken: ${cleanRefreshToken.substring(0, 15)}...${cleanRefreshToken.substring(cleanRefreshToken.length - 10)}`);
+
+    let lastError;
+
+    // Attempt 1: URLSearchParams (standard form-urlencoded with encoded pipe)
+    try {
+      const params = new URLSearchParams();
+      params.append('grant_type', 'refresh_token');
+      params.append('refresh_token', cleanRefreshToken);
+      params.append('client_id', cleanClientId);
+      params.append('client_secret', cleanClientSecret);
+
+      const response = await axios.post('https://api.amazon.com/auth/o2/token', params.toString(), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+      });
+      return response.data.access_token;
+    } catch (err1) {
+      lastError = err1;
+      console.warn('[Amazon SP-API] Attempt 1 (URLSearchParams) failed:', err1.response?.data || err1.message);
+    }
+
+    // Attempt 2: JSON payload
     try {
       const response = await axios.post('https://api.amazon.com/auth/o2/token', {
         grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret
+        refresh_token: cleanRefreshToken,
+        client_id: cleanClientId,
+        client_secret: cleanClientSecret
+      }, {
+        headers: { 'Content-Type': 'application/json' }
       });
       return response.data.access_token;
-    } catch (err) {
-      console.error('Failed to retrieve Amazon SP-API access token:', err.response?.data || err.message);
-      throw new Error('Amazon authentication failed');
+    } catch (err2) {
+      lastError = err2;
+      console.warn('[Amazon SP-API] Attempt 2 (JSON) failed:', err2.response?.data || err2.message);
     }
+
+    // Attempt 3: Raw unencoded form body
+    try {
+      const rawBody = `grant_type=refresh_token&refresh_token=${cleanRefreshToken}&client_id=${cleanClientId}&client_secret=${cleanClientSecret}`;
+      const response = await axios.post('https://api.amazon.com/auth/o2/token', rawBody, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+      });
+      return response.data.access_token;
+    } catch (err3) {
+      lastError = err3;
+      console.warn('[Amazon SP-API] Attempt 3 (Raw form) failed:', err3.response?.data || err3.message);
+    }
+
+    const respData = lastError.response?.data;
+    let amazonErr = respData?.error_description || respData?.error || lastError.message;
+    if (respData?.error === 'unauthorized_client' || amazonErr.includes('Not authorized')) {
+      amazonErr = `Amazon LWA Error (unauthorized_client): The provided Client ID (${cleanClientId.substring(0, 25)}...) and Client Secret do NOT match the Amazon Developer Application that generated the Refresh Token. Please ensure all three credentials (Client ID, Client Secret, and Refresh Token) belong to the EXACT same LWA Application in Amazon Developer Console / Seller Central.`;
+    }
+    console.error('Failed to retrieve Amazon SP-API access token:', respData || lastError.message);
+    throw new Error(`Amazon authentication failed: ${amazonErr}`);
   }
 
   /**
@@ -52,25 +100,31 @@ class AmazonSpapiService {
         where: { companyId, platform, status: 'ACTIVE' }
       });
 
-      let clientId, clientSecret, refreshToken, sellerId;
-      if (config) {
-        const creds = safeJsonParse(config.credentials);
-        clientId = creds.clientId;
-        clientSecret = creds.clientSecret;
-        refreshToken = creds.refreshToken;
-        sellerId = creds.sellerId;
-      } else {
-        clientId = process.env.AMAZON_CLIENT_ID;
-        clientSecret = process.env.AMAZON_CLIENT_SECRET;
-        refreshToken = process.env.AMAZON_REFRESH_TOKEN;
-        sellerId = process.env.AMAZON_SELLER_ID;
-      }
+      const creds = config ? safeJsonParse(config.credentials) : {};
+      const clientId = (creds.clientId && creds.clientId !== '********') ? creds.clientId : process.env.AMAZON_CLIENT_ID;
+      const clientSecret = (creds.clientSecret && creds.clientSecret !== '********') ? creds.clientSecret : process.env.AMAZON_CLIENT_SECRET;
+      const refreshToken = (creds.refreshToken && creds.refreshToken !== '********') ? creds.refreshToken : process.env.AMAZON_REFRESH_TOKEN;
+      const sellerId = creds.sellerId || process.env.AMAZON_SELLER_ID;
 
       if (!clientId || !clientSecret || !refreshToken) {
         throw new Error('Missing OAuth credentials in Amazon config and process.env');
       }
 
-      const accessToken = await this.getAccessToken(clientId, clientSecret, refreshToken);
+      let accessToken;
+      try {
+        accessToken = await this.getAccessToken(clientId, clientSecret, refreshToken);
+      } catch (authErr) {
+        const envClientId = process.env.AMAZON_CLIENT_ID;
+        const envClientSecret = process.env.AMAZON_CLIENT_SECRET;
+        const envRefreshToken = process.env.AMAZON_REFRESH_TOKEN;
+
+        if (envClientId && envClientSecret && envRefreshToken && (clientId !== envClientId || refreshToken !== envRefreshToken)) {
+          console.warn('[Amazon SP-API] DB credentials failed LWA auth. Retrying directly with process.env credentials...');
+          accessToken = await this.getAccessToken(envClientId, envClientSecret, envRefreshToken);
+        } else {
+          throw authErr;
+        }
+      }
 
       // European marketplace IDs (UK, FR, DE, IT, ES, PL, NL, SE, BE)
       const marketplaceIds = [
@@ -94,9 +148,35 @@ class AmazonSpapiService {
       });
 
       // 1. Fetch Orders from European market nodes
-      const marketplacesQuery = marketplaceIds.map(id => `MarketplaceIds=${id}`).join('&');
-      const ordersRes = await client.get(`/orders/v0/orders?${marketplacesQuery}&CreatedAfter=${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`);
-      const amazonOrders = ordersRes.data?.payload?.Orders || [];
+      const createdAfter = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const amazonOrders = [];
+      const orderIdsSeen = new Set();
+      let authErrors = 0;
+      let lastErrorMessage = '';
+
+      for (const mktId of marketplaceIds) {
+        try {
+          const ordersRes = await client.get(`/orders/v0/orders?MarketplaceIds=${mktId}&CreatedAfter=${createdAfter}`);
+          const fetchedOrders = ordersRes.data?.payload?.Orders || [];
+          for (const ord of fetchedOrders) {
+            if (!orderIdsSeen.has(ord.AmazonOrderId)) {
+              orderIdsSeen.add(ord.AmazonOrderId);
+              amazonOrders.push(ord);
+            }
+          }
+        } catch (mktErr) {
+          const spapiErr = mktErr.response?.data?.errors?.[0]?.message || mktErr.response?.data?.message || mktErr.message;
+          lastErrorMessage = spapiErr;
+          console.warn(`[Amazon SP-API] Could not fetch orders for Marketplace ${mktId}: ${spapiErr}`);
+          if (mktErr.response?.status === 403 || mktErr.response?.status === 401) {
+            authErrors++;
+          }
+        }
+      }
+
+      if (amazonOrders.length === 0 && authErrors === marketplaceIds.length) {
+        throw new Error(`Amazon SP-API Authorization Failed: ${lastErrorMessage || 'Not authorized for requested operation'}. Please verify in Amazon Seller Central that your Developer App has the 'Direct Merchant Fulfilled Orders' / 'Orders' role enabled for this seller account.`);
+      }
 
       let importedCount = 0;
 
@@ -255,14 +335,15 @@ class AmazonSpapiService {
 
       return importedCount;
     } catch (err) {
+      const spapiMsg = err.response?.data?.errors?.[0]?.message || err.message;
       console.error('Amazon sync failed:', err);
       if (logRecord) {
         await logRecord.update({
           status: 'FAILED',
-          message: `Error syncing Amazon orders: ${err.message}`
+          message: `Error syncing Amazon orders: ${spapiMsg}`
         });
       }
-      throw err;
+      throw new Error(spapiMsg.includes('Amazon') ? spapiMsg : `Amazon sync failed: ${spapiMsg}`);
     }
   }
 
@@ -280,22 +361,27 @@ class AmazonSpapiService {
         where: { companyId, platform: 'AMAZON', status: 'ACTIVE' }
       });
 
-      let clientId, clientSecret, refreshToken, sellerId;
-      if (config) {
-        const creds = safeJsonParse(config.credentials);
-        clientId = creds.clientId;
-        clientSecret = creds.clientSecret;
-        refreshToken = creds.refreshToken;
-        sellerId = creds.sellerId;
-      } else {
-        clientId = process.env.AMAZON_CLIENT_ID;
-        clientSecret = process.env.AMAZON_CLIENT_SECRET;
-        refreshToken = process.env.AMAZON_REFRESH_TOKEN;
-        sellerId = process.env.AMAZON_SELLER_ID;
-      }
+      const creds = config ? safeJsonParse(config.credentials) : {};
+      const clientId = (creds.clientId && creds.clientId !== '********') ? creds.clientId : process.env.AMAZON_CLIENT_ID;
+      const clientSecret = (creds.clientSecret && creds.clientSecret !== '********') ? creds.clientSecret : process.env.AMAZON_CLIENT_SECRET;
+      const refreshToken = (creds.refreshToken && creds.refreshToken !== '********') ? creds.refreshToken : process.env.AMAZON_REFRESH_TOKEN;
+      const sellerId = creds.sellerId || process.env.AMAZON_SELLER_ID;
 
-      if (!clientId || !clientSecret || !refreshToken) return;
-      const accessToken = await this.getAccessToken(clientId, clientSecret, refreshToken);
+      let accessToken;
+      try {
+        accessToken = await this.getAccessToken(clientId, clientSecret, refreshToken);
+      } catch (authErr) {
+        const envClientId = process.env.AMAZON_CLIENT_ID;
+        const envClientSecret = process.env.AMAZON_CLIENT_SECRET;
+        const envRefreshToken = process.env.AMAZON_REFRESH_TOKEN;
+
+        if (config && envClientId && envClientSecret && envRefreshToken && (clientId !== envClientId || refreshToken !== envRefreshToken)) {
+          console.warn('[Amazon SP-API] DB credentials failed LWA auth in pushFulfillment. Retrying with process.env credentials...');
+          accessToken = await this.getAccessToken(envClientId, envClientSecret, envRefreshToken);
+        } else {
+          throw authErr;
+        }
+      }
 
       const client = axios.create({
         baseURL: 'https://sellingpartnerapi-eu.amazonservices.com',

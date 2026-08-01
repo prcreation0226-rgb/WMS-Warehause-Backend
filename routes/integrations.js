@@ -240,13 +240,21 @@ router.post('/sync', authenticate, requireRole(...adminRoles), async (req, res, 
     }
 
     let recordsCount = 0;
-    if (platform === 'SHOPIFY_FFD') {
+    if (platform === 'SHIPSTATION') {
+      const shipstationService = require('../modules/integrations/shipstation.service');
+      const resObj = await shipstationService.syncOrdersFromShipStation(companyId);
+      if (!resObj.success) {
+        return res.status(500).json({ success: false, message: `ShipStation Order Sync failed: ${resObj.error || resObj.message}` });
+      }
+      recordsCount = resObj.syncedCount || 0;
+    } else if (platform === 'SHOPIFY_FFD') {
       recordsCount = await shopifyService.syncOrders(companyId, false);
     } else if (platform === 'SHOPIFY_WHOLESALE') {
       recordsCount = await shopifyService.syncOrders(companyId, true);
     } else if (platform === 'AMAZON') {
       const config = await IntegrationConfig.findOne({ where: { companyId, platform: 'AMAZON', status: 'ACTIVE' } });
-      const refreshToken = config ? safeParse(config.credentials).refreshToken : process.env.AMAZON_REFRESH_TOKEN;
+      const creds = config ? safeParse(config.credentials) : {};
+      const refreshToken = (creds.refreshToken && creds.refreshToken !== '********') ? creds.refreshToken : process.env.AMAZON_REFRESH_TOKEN;
       if (!refreshToken) {
         return res.status(400).json({ success: false, message: 'Amazon Sync requires a Refresh Token. Please configure it by clicking Connect or adding AMAZON_REFRESH_TOKEN in the backend .env file.' });
       }

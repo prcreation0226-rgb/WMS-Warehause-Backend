@@ -1,14 +1,15 @@
 const axios = require('axios');
 const { SalesOrder, OrderItem, Product, ProductStock, IntegrationConfig } = require('../../models');
 
-const SHIPSTATION_V2_BASE_URL = process.env.SHIPSTATION_API_URL || 'https://api.shipstation.com/v2';
+const SHIPSTATION_V2_BASE_URL = process.env.SHIPSTATION_API_URL || 'https://ssapi.shipstation.com';
 
 /**
  * Fetch ShipStation API Config for a company
  */
 async function getShipStationConfig(companyId) {
-  let apiKey = process.env.SHIPSTATION_API_KEY;
-  let apiSecret = process.env.SHIPSTATION_API_SECRET;
+  let apiKey = process.env.SHIPSTATION_API_KEY || 'dP0Y7s5vtA4sp+Orbzo1kQlrDX7zsdhZB6M+Kdoiagg';
+  let apiSecret = process.env.SHIPSTATION_API_SECRET || '';
+  let storeMappings = {};
 
   if (companyId) {
     const config = await IntegrationConfig.findOne({
@@ -18,10 +19,11 @@ async function getShipStationConfig(companyId) {
       const creds = typeof config.credentials === 'string' ? JSON.parse(config.credentials) : config.credentials;
       if (creds.apiKey) apiKey = creds.apiKey;
       if (creds.apiSecret) apiSecret = creds.apiSecret;
+      if (creds.storeMappings) storeMappings = creds.storeMappings;
     }
   }
 
-  return { apiKey, apiSecret, baseUrl: SHIPSTATION_V2_BASE_URL };
+  return { apiKey, apiSecret, baseUrl: process.env.SHIPSTATION_API_URL || SHIPSTATION_V2_BASE_URL, storeMappings };
 }
 
 function firstProductImage(images) {
@@ -100,27 +102,88 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
 }
 
 /**
- * Sync Orders from ShipStation API v2 (No PII: Store only Order ID, SKUs, Qty, Metadata)
+ * Sync Orders from ShipStation API
  */
 async function syncOrdersFromShipStation(companyId) {
-  const { apiKey, apiSecret, baseUrl } = await getShipStationConfig(companyId);
+  const { apiKey, apiSecret, baseUrl, storeMappings } = await getShipStationConfig(companyId);
   if (!apiKey) {
     console.log('[ShipStation] API Key not configured. Skipping live sync.');
-    return { syncedCount: 0, message: 'ShipStation credentials missing' };
+    return { success: false, syncedCount: 0, message: 'ShipStation credentials missing' };
+  }
+
+  const cleanKey = apiKey.trim();
+  const cleanSecret = (apiSecret || '').trim();
+
+  // Try multiple authorization header formats supported by ShipStation
+  const authAttempts = [];
+  if (cleanSecret) {
+    authAttempts.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${cleanKey}:${cleanSecret}`).toString('base64') } });
+  }
+  authAttempts.push({ name: 'Basic (Key only)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${cleanKey}:`).toString('base64') } });
+  authAttempts.push({ name: 'Basic (Key:Key)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${cleanKey}:${cleanKey}`).toString('base64') } });
+  authAttempts.push({ name: 'Bearer Token', headers: { 'Authorization': `Bearer ${cleanKey}` } });
+  authAttempts.push({ name: 'api-key Header', headers: { 'api-key': cleanKey } });
+
+  let response;
+  let lastError;
+
+  for (const attempt of authAttempts) {
+    try {
+      response = await axios.get(`${baseUrl}/orders?orderStatus=awaiting_shipment`, {
+        headers: attempt.headers
+      });
+      console.log(`[ShipStation Sync] Authenticated successfully using ${attempt.name}`);
+      break;
+    } catch (err) {
+      lastError = err;
+      if (err.response?.status !== 401) {
+        // Stop retrying if it's not an auth error (e.g. 500, network error)
+        break;
+      }
+    }
+  }
+
+  if (!response) {
+    const respData = lastError?.response?.data;
+    let errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || lastError?.message;
+
+    if (lastError?.response?.status === 401) {
+      errMessage = `ShipStation 401 Unauthorized: Invalid API Key or missing API Secret. ShipStation requires BOTH API Key and API Secret from ShipStation Settings > Account > API Settings. Please add SHIPSTATION_API_SECRET in backend .env or via Connect modal.`;
+    }
+
+    console.error('[ShipStation Sync Error]:', respData || lastError?.message);
+    return { success: false, error: errMessage, syncedCount: 0 };
   }
 
   try {
-    const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret || ''}`).toString('base64');
-    const response = await axios.get(`${baseUrl}/orders?orderStatus=awaiting_shipment`, {
-      headers: { Authorization: authHeader }
-    });
-
     const orders = response.data.orders || response.data || [];
     let syncedCount = 0;
 
     for (const ssOrder of orders) {
       const shipstationOrderId = String(ssOrder.orderId || ssOrder.id);
       const orderNumber = ssOrder.orderNumber || `SS-${shipstationOrderId}`;
+      const storeId = String(ssOrder.advancedOptions?.storeId || ssOrder.storeId || '');
+
+      // Determine Sales Channel from Store ID Mapping
+      let salesChannel = 'SHIPSTATION';
+      if (storeId && storeMappings && storeMappings[storeId]) {
+        salesChannel = storeMappings[storeId].toUpperCase();
+      } else if (ssOrder.advancedOptions?.source) {
+        salesChannel = ssOrder.advancedOptions.source.toUpperCase();
+      } else if (ssOrder.storeName) {
+        const sName = ssOrder.storeName.toUpperCase();
+        if (sName.includes('WHOLESALE')) salesChannel = 'SHOPIFY_WHOLESALE';
+        else if (sName.includes('SHOPIFY')) salesChannel = 'SHOPIFY';
+        else if (sName.includes('EBAY')) salesChannel = 'EBAY';
+        else if (sName.includes('TEMU')) salesChannel = 'TEMU';
+        else if (sName.includes('AMAZON')) salesChannel = 'AMAZON';
+        else if (sName.includes('TIKTOK')) salesChannel = 'TIKTOK';
+      }
+
+      // Shipping address & requested courier details
+      const shipTo = ssOrder.shipTo || ssOrder.shippingAddress || {};
+      const courierService = ssOrder.requestedShippingService || ssOrder.serviceCode || ssOrder.carrierCode || 'Standard Courier';
+      const courierName = ssOrder.carrierCode ? ssOrder.carrierCode.replace(/_/g, ' ').toUpperCase() : 'SHIPSTATION';
 
       // Check if order already exists
       let existingOrder = await SalesOrder.findOne({
@@ -128,16 +191,27 @@ async function syncOrdersFromShipStation(companyId) {
       });
 
       if (!existingOrder) {
-        // Create SalesOrder WITHOUT customer PII
         existingOrder = await SalesOrder.create({
           companyId: companyId || 1,
           orderNumber,
           shipstationOrderId,
-          shipstationStoreId: String(ssOrder.advancedOptions?.storeId || ssOrder.storeId || ''),
+          shipstationStoreId: storeId,
           orderDate: ssOrder.orderDate ? ssOrder.orderDate.split('T')[0] : new Date().toISOString().split('T')[0],
           status: 'NEW',
           priority: ssOrder.priority || 'MEDIUM',
-          salesChannel: ssOrder.advancedOptions?.source || 'SHIPSTATION',
+          salesChannel,
+          courierName,
+          courierService,
+          recipientName: shipTo.name || ssOrder.customerUsername || 'ShipStation Customer',
+          addressLine1: shipTo.street1 || shipTo.address1 || '',
+          addressLine2: shipTo.street2 || shipTo.address2 || '',
+          addressLine3: shipTo.street3 || '',
+          town: shipTo.city || '',
+          county: shipTo.state || '',
+          postcode: shipTo.postalCode || shipTo.zip || '',
+          country: shipTo.country || 'UNITED KINGDOM',
+          phone: shipTo.phone || '',
+          email: ssOrder.customerEmail || '',
           checkContentRequired: true,
           isBundle: false,
           totalAmount: ssOrder.orderTotal || 0,
@@ -182,10 +256,12 @@ async function syncOrdersFromShipStation(companyId) {
       }
     }
 
-    return { success: true, syncedCount };
+    return { success: true, syncedCount, message: `Successfully synced ${syncedCount} new orders from ShipStation.` };
   } catch (error) {
-    console.error('[ShipStation Sync Error]:', error.response?.data || error.message);
-    return { success: false, error: error.message };
+    const respData = error.response?.data;
+    const errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || error.message;
+    console.error('[ShipStation Sync Error]:', respData || error.message);
+    return { success: false, error: errMessage, syncedCount: 0 };
   }
 }
 

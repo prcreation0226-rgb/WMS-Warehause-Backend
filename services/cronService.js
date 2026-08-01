@@ -103,6 +103,14 @@ async function runAllIntegrationsSync() {
         const companies = await Company.findAll({ attributes: ['id'] });
         for (const company of companies) {
             const companyId = company.id;
+
+            // Check ShipStation (Central Hub for All Orders)
+            try {
+                const shipstationService = require('../modules/integrations/shipstation.service');
+                await shipstationService.syncOrdersFromShipStation(companyId);
+            } catch (err) {
+                console.error(`[CRON] ShipStation order sync failed for company ${companyId}:`, err.message);
+            }
             
             // Check Shopify FFD
             try {

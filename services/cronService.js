@@ -95,70 +95,19 @@ async function processScheduledReports() {
 
 async function runAllIntegrationsSync() {
     try {
-        const { Company, IntegrationConfig } = require('../models');
-        const shopifyService = require('./shopifyService');
-        const amazonSpapiService = require('./amazonSpapiService');
-        const ebayService = require('./ebayService');
-
         const companies = await Company.findAll({ attributes: ['id'] });
         for (const company of companies) {
             const companyId = company.id;
 
-            // Check ShipStation (Central Hub for All Orders)
+            // Check ShipStation (Central Hub for All Orders - V2)
             try {
                 const shipstationService = require('../modules/integrations/shipstation.service');
                 await shipstationService.syncOrdersFromShipStation(companyId);
             } catch (err) {
-                console.error(`[CRON] ShipStation order sync failed for company ${companyId}:`, err.message);
+                console.error(`[CRON] ShipStation V2 order sync failed for company ${companyId}:`, err.message);
             }
             
-            // Check Shopify FFD
-            try {
-                const config = await IntegrationConfig.findOne({ where: { companyId, platform: 'SHOPIFY_FFD', status: 'ACTIVE' } });
-                const hasEnv = !!(process.env.SHOPIFY_FFD_DOMAIN && process.env.SHOPIFY_FFD_ACCESS_TOKEN);
-                if (config || hasEnv) {
-                    await shopifyService.syncOrders(companyId, false);
-                }
-            } catch (err) {
-                console.error(`[CRON] Shopify Retail sync failed for company ${companyId}:`, err.message);
-            }
-
-            // Check Shopify Wholesale
-            try {
-                const config = await IntegrationConfig.findOne({ where: { companyId, platform: 'SHOPIFY_WHOLESALE', status: 'ACTIVE' } });
-                const hasEnv = !!(process.env.SHOPIFY_WHOLESALE_DOMAIN && process.env.SHOPIFY_WHOLESALE_ACCESS_TOKEN);
-                if (config || hasEnv) {
-                    await shopifyService.syncOrders(companyId, true);
-                }
-            } catch (err) {
-                console.error(`[CRON] Shopify Wholesale sync failed for company ${companyId}:`, err.message);
-            }
-
-            // Check Amazon
-            try {
-                const config = await IntegrationConfig.findOne({ where: { companyId, platform: 'AMAZON', status: 'ACTIVE' } });
-                const hasEnv = !!(process.env.AMAZON_CLIENT_ID && process.env.AMAZON_CLIENT_SECRET && process.env.AMAZON_REFRESH_TOKEN);
-                if (config || hasEnv) {
-                    await amazonSpapiService.syncOrders(companyId);
-                }
-            } catch (err) {
-                console.error(`[CRON] Amazon sync failed for company ${companyId}:`, err.message);
-            }
-
-            // Check eBay
-            try {
-                const config = await IntegrationConfig.findOne({ where: { companyId, platform: 'EBAY', status: 'ACTIVE' } });
-                const isSandbox = (process.env.EBAY_ENV || 'PRODUCTION') === 'SANDBOX';
-                const hasEnv = !!(
-                    (isSandbox ? process.env.EBAY_SANDBOX_REFRESH_TOKEN : process.env.EBAY_PROD_REFRESH_TOKEN) &&
-                    (isSandbox ? process.env.EBAY_SANDBOX_APP_ID : process.env.EBAY_PROD_APP_ID)
-                );
-                if (config || hasEnv) {
-                    await ebayService.syncOrders(companyId);
-                }
-            } catch (err) {
-                console.error(`[CRON] eBay sync failed for company ${companyId}:`, err.message);
-            }
+            // Direct Order Sync APIs for Shopify, Amazon, eBay are disabled in favor of ShipStation V2 Central Hub
         }
     } catch (err) {
         console.error('[CRON] Error in runAllIntegrationsSync:', err);

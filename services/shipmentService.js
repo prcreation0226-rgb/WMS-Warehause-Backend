@@ -88,14 +88,13 @@ async function update(id, data, reqUser) {
       courierName: shipment.courierName || order.courierName
     });
     
-    // Trigger marketplace fulfillment sync asynchronously
-    const shopifyService = require('./shopifyService');
-    const amazonSpapiService = require('./amazonSpapiService');
-    const ebayService = require('./ebayService');
-    
-    shopifyService.pushFulfillment(order.companyId, order.id).catch(err => console.error('Shopify fulfillment sync failed:', err.message));
-    amazonSpapiService.pushFulfillment(order.companyId, order.id).catch(err => console.error('Amazon fulfillment sync failed:', err.message));
-    ebayService.pushFulfillment(order.companyId, order.id).catch(err => console.error('eBay fulfillment sync failed:', err.message));
+    // Trigger ShipStation V2 fulfillment notification
+    try {
+      const shipstationService = require('../modules/integrations/shipstation.service');
+      shipstationService.createShippingLabelAndDispatch(order.id, { companyId: order.companyId }, true).catch(err => console.error('ShipStation dispatch notify note:', err.message));
+    } catch (e) {
+      // Ignore
+    }
   } else if (data.deliveryStatus === 'DELIVERED') {
     await order.update({ status: 'COMPLETED' });
   } else if (data.deliveryStatus === 'FAILED' || data.deliveryStatus === 'RETURNED') {

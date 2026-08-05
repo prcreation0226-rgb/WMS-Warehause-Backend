@@ -7,5 +7,6 @@ router.post('/webhook', shipstationController.webhook);
 router.post('/sync-orders', authenticate, requireAdmin, shipstationController.syncOrders);
 router.get('/store-mappings', authenticate, requireAdmin, shipstationController.getStoreMappings);
 router.post('/store-mappings', authenticate, requireAdmin, shipstationController.saveStoreMappings);
+router.get('/stores', authenticate, requireAdmin, shipstationController.getStores);
 
 module.exports = router;

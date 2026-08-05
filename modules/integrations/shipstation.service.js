@@ -7,7 +7,7 @@ const SHIPSTATION_V2_BASE_URL = process.env.SHIPSTATION_API_URL || 'https://ssap
  * Fetch ShipStation API Config for a company
  */
 async function getShipStationConfig(companyId) {
-  let apiKey = process.env.SHIPSTATION_API_KEY || 'dP0Y7s5vtA4sp+Orbzo1kQlrDX7zsdhZB6M+Kdoiagg';
+  let apiKey = process.env.SHIPSTATION_API_KEY || '';
   let apiSecret = process.env.SHIPSTATION_API_SECRET || '';
   let storeMappings = {};
 
@@ -102,27 +102,37 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
 }
 
 /**
- * Sync Orders from ShipStation API
+ * Sync Orders from ShipStation API (Central Order Hub)
  */
 async function syncOrdersFromShipStation(companyId) {
   const { apiKey, apiSecret, baseUrl, storeMappings } = await getShipStationConfig(companyId);
   if (!apiKey) {
     console.log('[ShipStation] API Key not configured. Skipping live sync.');
-    return { success: false, syncedCount: 0, message: 'ShipStation credentials missing' };
+    return { success: false, syncedCount: 0, message: 'ShipStation API Key missing. Please configure your API Key under Integration Settings.' };
   }
 
   const cleanKey = apiKey.trim();
   const cleanSecret = (apiSecret || '').trim();
 
-  // Try multiple authorization header formats supported by ShipStation
-  const authAttempts = [];
-  if (cleanSecret) {
-    authAttempts.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${cleanKey}:${cleanSecret}`).toString('base64') } });
+  let effectiveKey = cleanKey;
+  let effectiveSecret = cleanSecret;
+
+  if (cleanKey.includes(':')) {
+    const parts = cleanKey.split(':');
+    effectiveKey = parts[0].trim();
+    effectiveSecret = parts.slice(1).join(':').trim();
   }
-  authAttempts.push({ name: 'Basic (Key only)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${cleanKey}:`).toString('base64') } });
-  authAttempts.push({ name: 'Basic (Key:Key)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${cleanKey}:${cleanKey}`).toString('base64') } });
-  authAttempts.push({ name: 'Bearer Token', headers: { 'Authorization': `Bearer ${cleanKey}` } });
-  authAttempts.push({ name: 'api-key Header', headers: { 'api-key': cleanKey } });
+
+  console.log(`[ShipStation Sync] Attempting sync with Key: ${effectiveKey ? effectiveKey.substring(0, 6) + '...' : 'EMPTY'}, Secret: ${effectiveSecret ? effectiveSecret.substring(0, 6) + '...' : 'EMPTY'}`);
+
+  // ShipStation Authorization header attempts
+  const authAttempts = [];
+  if (effectiveSecret) {
+    authAttempts.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64') } });
+  }
+  authAttempts.push({ name: 'Basic (Key only)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:`).toString('base64') } });
+  authAttempts.push({ name: 'Bearer Token', headers: { 'Authorization': `Bearer ${effectiveKey}` } });
+  authAttempts.push({ name: 'api-key Header', headers: { 'api-key': effectiveKey } });
 
   let response;
   let lastError;
@@ -137,7 +147,6 @@ async function syncOrdersFromShipStation(companyId) {
     } catch (err) {
       lastError = err;
       if (err.response?.status !== 401) {
-        // Stop retrying if it's not an auth error (e.g. 500, network error)
         break;
       }
     }
@@ -148,7 +157,7 @@ async function syncOrdersFromShipStation(companyId) {
     let errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || lastError?.message;
 
     if (lastError?.response?.status === 401) {
-      errMessage = `ShipStation 401 Unauthorized: Invalid API Key or missing API Secret. ShipStation requires BOTH API Key and API Secret from ShipStation Settings > Account > API Settings. Please add SHIPSTATION_API_SECRET in backend .env or via Connect modal.`;
+      errMessage = `ShipStation 401 Unauthorized: Invalid API credentials. Please verify your ShipStation API Key and API Secret under Integration Settings (ShipStation Settings > Account > API Settings).`;
     }
 
     console.error('[ShipStation Sync Error]:', respData || lastError?.message);
@@ -269,11 +278,11 @@ async function syncOrdersFromShipStation(companyId) {
  * Push Inventory Updates to ShipStation API v2
  */
 async function updateInventoryToShipStation(companyId, sku, availableQty) {
-  const { apiKey, apiSecret, baseUrl } = await getShipStationConfig(companyId);
+  const { apiKey, baseUrl } = await getShipStationConfig(companyId);
   if (!apiKey) return false;
 
   try {
-    const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret || ''}`).toString('base64');
+    const authHeader = `Bearer ${apiKey.trim()}`;
     await axios.post(`${baseUrl}/inventory/update`, {
       sku,
       availableQuantity: availableQty
@@ -310,7 +319,7 @@ async function createShippingLabelAndDispatch(orderId, reqUser, forceOverride = 
     }
   }
 
-  const { apiKey, apiSecret, baseUrl } = await getShipStationConfig(order.companyId);
+  const { apiKey, baseUrl } = await getShipStationConfig(order.companyId);
   
   let labelUrl = null;
   let trackingNumber = `TRK-${Date.now()}`;
@@ -318,7 +327,7 @@ async function createShippingLabelAndDispatch(orderId, reqUser, forceOverride = 
 
   if (apiKey && order.shipstationOrderId) {
     try {
-      const authHeader = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret || ''}`).toString('base64');
+      const authHeader = `Bearer ${apiKey.trim()}`;
       const response = await axios.post(`${baseUrl}/orders/createlabel`, {
         orderId: order.shipstationOrderId,
         carrierCode: order.courierName || 'royal_mail',
@@ -355,8 +364,49 @@ async function createShippingLabelAndDispatch(orderId, reqUser, forceOverride = 
   };
 }
 
+/**
+ * Fetch connected stores list directly from ShipStation API (/stores)
+ */
+async function getShipStationStores(companyId) {
+  const { apiKey, apiSecret, baseUrl } = await getShipStationConfig(companyId);
+  if (!apiKey) return [];
+
+  const cleanKey = apiKey.trim();
+  const cleanSecret = (apiSecret || '').trim();
+
+  let effectiveKey = cleanKey;
+  let effectiveSecret = cleanSecret;
+
+  if (cleanKey.includes(':')) {
+    const parts = cleanKey.split(':');
+    effectiveKey = parts[0].trim();
+    effectiveSecret = parts.slice(1).join(':').trim();
+  }
+
+  const authAttempts = [];
+  if (effectiveSecret) {
+    authAttempts.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64') } });
+  }
+  authAttempts.push({ name: 'Basic (Key only)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:`).toString('base64') } });
+  authAttempts.push({ name: 'Bearer Token', headers: { 'Authorization': `Bearer ${effectiveKey}` } });
+  authAttempts.push({ name: 'api-key Header', headers: { 'api-key': effectiveKey } });
+
+  for (const attempt of authAttempts) {
+    try {
+      const response = await axios.get(`${baseUrl}/stores`, { headers: attempt.headers });
+      const stores = response.data || [];
+      return Array.isArray(stores) ? stores : (stores.stores || []);
+    } catch (err) {
+      // try next
+    }
+  }
+
+  return [];
+}
+
 module.exports = {
   syncOrdersFromShipStation,
   updateInventoryToShipStation,
-  createShippingLabelAndDispatch
+  createShippingLabelAndDispatch,
+  getShipStationStores
 };

@@ -52,11 +52,14 @@ async function list(reqUser, query = {}) {
     where[dateField] = dateCond;
   }
 
-  // Search filter (SKU, postcode, customer name, order number, billing/shipping address)
+  // Search filter (SKU, postcode, customer name, order number, recipient, town, billing/shipping address)
   if (query.search) {
     const searchVal = `%${query.search}%`;
     where[Op.or] = [
       { orderNumber: { [Op.like]: searchVal } },
+      { recipientName: { [Op.like]: searchVal } },
+      { addressLine1: { [Op.like]: searchVal } },
+      { town: { [Op.like]: searchVal } },
       { postcode: { [Op.like]: searchVal } },
       { country: { [Op.like]: searchVal } },
       { externalRef: { [Op.like]: searchVal } },
@@ -65,7 +68,8 @@ async function list(reqUser, query = {}) {
       { '$Client.address$': { [Op.like]: searchVal } },
       { '$Client.city$': { [Op.like]: searchVal } },
       { '$Client.postcode$': { [Op.like]: searchVal } },
-      { '$OrderItems.Product.sku$': { [Op.like]: searchVal } }
+      { '$OrderItems.Product.sku$': { [Op.like]: searchVal } },
+      { '$OrderItems.Product.name$': { [Op.like]: searchVal } }
     ];
   }
 
@@ -74,8 +78,57 @@ async function list(reqUser, query = {}) {
   const limit = parseInt(query.pageSize, 10) || 20;
   const offset = (page - 1) * limit;
 
-  const { rows, count } = await SalesOrder.findAndCountAll({
+  // 1. Get exact matching SalesOrder IDs and total count
+  const orderIdsResult = await SalesOrder.findAll({
     where,
+    attributes: ['id'],
+    order: [['id', 'DESC']],
+    subQuery: false,
+    distinct: true,
+    include: [
+      { association: 'Client', attributes: [], required: false },
+      {
+        association: 'OrderItems',
+        attributes: [],
+        required: false,
+        include: [{ association: 'Product', attributes: [], required: false }]
+      }
+    ],
+    group: ['SalesOrder.id'],
+    limit,
+    offset,
+  });
+
+  const ids = orderIdsResult.map(o => o.id);
+
+  const totalCount = await SalesOrder.count({
+    where,
+    subQuery: false,
+    distinct: true,
+    col: 'id',
+    include: [
+      { association: 'Client', attributes: [], required: false },
+      {
+        association: 'OrderItems',
+        attributes: [],
+        required: false,
+        include: [{ association: 'Product', attributes: [], required: false }]
+      }
+    ]
+  });
+
+  if (ids.length === 0) {
+    return {
+      items: [],
+      total: totalCount,
+      page,
+      pageSize: limit
+    };
+  }
+
+  // 2. Fetch full associated details for the page's order IDs
+  const rows = await SalesOrder.findAll({
+    where: { id: { [Op.in]: ids } },
     order: [['id', 'DESC']],
     include: [
       { association: 'Company', attributes: ['id', 'name', 'code'] },
@@ -91,15 +144,12 @@ async function list(reqUser, query = {}) {
       },
       { association: 'PickLists', include: [{ association: 'PickListItems', include: [{ association: 'Product' }] }] },
       { association: 'Shipment' },
-    ],
-    distinct: true,
-    limit,
-    offset,
+    ]
   });
 
   return {
     items: rows.map((o) => o.get({ plain: true })),
-    total: count,
+    total: totalCount,
     page,
     pageSize: limit
   };
@@ -120,6 +170,36 @@ async function getById(id, reqUser) {
   if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) throw new Error('Order not found');
 
   const orderJson = order.get({ plain: true });
+
+  // Map productImageUrl fallback from Product.images
+  if (Array.isArray(orderJson.OrderItems)) {
+    orderJson.OrderItems = orderJson.OrderItems.map(item => {
+      let img = item.productImageUrl || item.product_image_url || item.imageUrl || item.image_url;
+      if (!img && item.Product) {
+        const pImgs = item.Product.images || item.Product.imageUrl || item.Product.image;
+        if (Array.isArray(pImgs) && pImgs.length > 0) {
+          const raw = pImgs[0];
+          img = (raw && typeof raw === 'object') ? (raw.url || raw.src) : raw;
+        } else if (typeof pImgs === 'string' && pImgs.trim()) {
+          if (pImgs.startsWith('[') || pImgs.startsWith('{')) {
+            try {
+              const parsed = JSON.parse(pImgs);
+              const raw = Array.isArray(parsed) ? parsed[0] : parsed;
+              img = (raw && typeof raw === 'object') ? (raw.url || raw.src) : raw;
+            } catch (_) {
+              img = pImgs;
+            }
+          } else {
+            img = pImgs;
+          }
+        }
+      }
+      return {
+        ...item,
+        productImageUrl: img || null
+      };
+    });
+  }
 
   // Find matching template for client/channel
   const { DespatchNoteTemplate } = require('../models');

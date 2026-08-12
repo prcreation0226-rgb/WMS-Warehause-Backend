@@ -94,6 +94,42 @@ async function dispatchOrder(req, res, next) {
   }
 }
 
+async function verifyAll(req, res, next) {
+  try {
+    const data = await packingService.verifyAllPackingItems(req.params.id);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+async function clearAll(req, res, next) {
+  try {
+    const data = await packingService.clearAllPackingItems(req.params.id);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+async function verifyItem(req, res, next) {
+  try {
+    const data = await packingService.verifyPackingItemById(req.params.id, req.params.itemId);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+async function clearItem(req, res, next) {
+  try {
+    const data = await packingService.clearPackingItemById(req.params.id, req.params.itemId);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+}
+
 module.exports = {
   list,
   getById,
@@ -104,5 +140,9 @@ module.exports = {
   scanOrderByBarcode,
   toggleCheck,
   scanItem,
+  verifyAll,
+  clearAll,
+  verifyItem,
+  clearItem,
   dispatchOrder
 };

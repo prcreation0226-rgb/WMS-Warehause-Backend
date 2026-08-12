@@ -135,6 +135,9 @@ app.post('/api/products/:id/alternative-skus', authenticate, requireRole(...invP
 const returnRoutes = require('./routes/returnRoutes');
 app.use('/api/returns', returnRoutes);
 
+const customDataRoutes = require('./routes/customDataRoutes');
+app.use('/api/custom-data', customDataRoutes);
+
 app.get('/api/test-debug', async (req, res) => {
   try {
     const [columns] = await sequelize.query("DESCRIBE order_items");
@@ -338,12 +341,24 @@ async function start() {
         { t: 'sales_orders', c: 'vat_amount', type: 'DECIMAL(12, 2)' },
         { t: 'sales_orders', c: 'shipstation_order_id', type: 'VARCHAR(255)' },
         { t: 'sales_orders', c: 'shipstation_store_id', type: 'VARCHAR(255)' },
+        { t: 'sales_orders', c: 'channel_order_id', type: 'VARCHAR(255)' },
+        { t: 'sales_orders', c: 'marketplace', type: 'VARCHAR(255)' },
         { t: 'sales_orders', c: 'check_content_required', type: 'TINYINT(1) DEFAULT 1' },
         { t: 'sales_orders', c: 'is_bundle', type: 'TINYINT(1) DEFAULT 0' },
         { t: 'order_items', c: 'scanned_qty', type: 'INT DEFAULT 0' },
         { t: 'order_items', c: 'is_bundle_parent', type: 'TINYINT(1) DEFAULT 0' },
         { t: 'order_items', c: 'bundle_header', type: 'VARCHAR(255)' },
         { t: 'order_items', c: 'product_image_url', type: 'TEXT' },
+        { t: 'order_items', c: 'original_sku', type: 'VARCHAR(255)' },
+        { t: 'order_items', c: 'customized_url', type: 'TEXT' },
+        { t: 'customization_mappings', c: 'companyId', type: 'INT DEFAULT 1' },
+        { t: 'customization_mappings', c: 'originalSku', type: 'VARCHAR(255)' },
+        { t: 'customization_mappings', c: 'asin', type: 'VARCHAR(255)' },
+        { t: 'customization_mappings', c: 'optionValue', type: 'VARCHAR(255)' },
+        { t: 'customization_mappings', c: 'processedSku', type: 'VARCHAR(255)' },
+        { t: 'customization_mappings', c: 'outOfStock', type: 'TINYINT(1) DEFAULT 0' },
+        { t: 'customization_mappings', c: 'extra', type: 'VARCHAR(255)' },
+        { t: 'customization_mappings', c: 'costPrice', type: 'DECIMAL(10, 2)' },
       ];
       for (const col of manualCols) {
         try {
@@ -672,6 +687,14 @@ async function start() {
           needsUpdate = true;
         }
 
+        if (!order.marketplace || order.marketplace.toLowerCase() === 'shipstation' || order.marketplace === 'Direct') {
+          const mList = ['Amazon', 'Shopify', 'eBay', 'Walmart'];
+          const chosenM = mList[order.id % mList.length];
+          updates.marketplace = chosenM;
+          updates.salesChannel = chosenM.toUpperCase();
+          needsUpdate = true;
+        }
+
         if (order.batchId === null || order.batchId === undefined || order.batchId === 0) {
           updates.batchId = order.id % 3 === 0 ? order.id : 0;
           needsUpdate = true;
@@ -741,6 +764,29 @@ async function start() {
         });
         console.log(`[SEED] Created demo user: ${d.email}`);
       }
+    }
+
+    // AUTO-SEED DEMO CUSTOMIZATION MAPPINGS if empty or update missing fields
+    try {
+      const { CustomizationMapping } = require('./models');
+      const sampleMappings = [
+        { companyId: 1, originalSku: 'BY_30', asin: 'B09FKFVXBH', optionValue: 'Yoyo - Apple', processedSku: 'BE_Y_5_APP', outOfStock: false, extra: 'Amazon Custom Flavour Mapping', costPrice: 2.50 },
+        { companyId: 1, originalSku: 'BY_30', asin: 'B09FKFVXBH', optionValue: 'Yoyo - Strawberry', processedSku: 'BE_Y_5_STR', outOfStock: false, extra: 'Amazon Custom Flavour Mapping', costPrice: 2.50 },
+        { companyId: 1, originalSku: 'BY_30', asin: 'B09FKFVXBH', optionValue: 'Yoyo - Blackcurrant', processedSku: 'BE_Y_5_BLK', outOfStock: false, extra: 'Amazon Custom Flavour Mapping', costPrice: 2.50 },
+        { companyId: 1, originalSku: 'BY_30', asin: 'B09FKFVXBH', optionValue: 'Yoyo - Raspberry', processedSku: 'BE_Y_5_RAS', outOfStock: true, extra: 'Temporarily Out of Stock', costPrice: 2.50 },
+        { companyId: 1, originalSku: 'BY_50', asin: 'B08N5WRWNW', optionValue: 'Bear Fruit Yoyo - Mango 20g', processedSku: 'BE_Y_5_MNG', outOfStock: false, extra: 'Bulk Custom Pack', costPrice: 3.10 }
+      ];
+      for (const m of sampleMappings) {
+        const existing = await CustomizationMapping.findOne({ where: { asin: m.asin, optionValue: m.optionValue } });
+        if (!existing) {
+          await CustomizationMapping.create(m);
+        } else if (!existing.extra || existing.costPrice == null) {
+          await existing.update({ extra: m.extra, costPrice: m.costPrice, originalSku: m.originalSku });
+        }
+      }
+      console.log('[SEED] Ensured Customization Mappings data with Extra & Cost Price');
+    } catch (e) {
+      console.warn('[SEED] CustomizationMapping seed error:', e.message);
     }
 
     // Initialize Cron AFTER database sync is complete

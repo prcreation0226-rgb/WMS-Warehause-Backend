@@ -21,6 +21,10 @@ const OrderItem = sequelize.define('OrderItem', {
   isBundleParent: { type: DataTypes.BOOLEAN, defaultValue: false, field: 'is_bundle_parent' },
   bundleHeader: { type: DataTypes.STRING, allowNull: true, field: 'bundle_header' },
   productImageUrl: { type: DataTypes.TEXT, allowNull: true, field: 'product_image_url' },
+  
+  // Amazon Customization fields
+  originalSku: { type: DataTypes.STRING, allowNull: true, field: 'original_sku' },
+  customizedUrl: { type: DataTypes.TEXT, allowNull: true, field: 'customized_url' },
 }, {
   tableName: 'order_items',
   timestamps: true,

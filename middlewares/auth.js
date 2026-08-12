@@ -7,12 +7,18 @@ const normalizeRole = (role) => (role || '').toLowerCase().replace(/-/g, '_');
 
 const authenticate = async (req, res, next) => {
   try {
+    let token = null;
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('[AUTH] No token found in header');
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    } else if (req.query && req.query.token) {
+      token = req.query.token;
+    }
+
+    if (!token) {
+      console.log('[AUTH] No token found in header or query');
       return res.status(401).json({ success: false, message: 'Token required' });
     }
-    const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     
     // Log decoded token (be careful with sensitive info, but for debugging this is what user asked)

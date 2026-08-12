@@ -27,7 +27,7 @@ router.get('/', authenticate, requireRole(...adminRoles), async (req, res, next)
     const configs = await IntegrationConfig.findAll({
       where: { companyId }
     });
-    
+
     const dbPlatforms = configs.map(c => c.platform.toUpperCase());
 
     // Normalize response, hiding credentials/secrets
@@ -73,10 +73,10 @@ router.get('/', authenticate, requireRole(...adminRoles), async (req, res, next)
       {
         platform: 'ebay',
         hasEnv: !!(
-          (process.env.EBAY_ENV === 'SANDBOX' ? process.env.EBAY_SANDBOX_APP_ID : process.env.EBAY_PROD_APP_ID) && 
+          (process.env.EBAY_ENV === 'SANDBOX' ? process.env.EBAY_SANDBOX_APP_ID : process.env.EBAY_PROD_APP_ID) &&
           (process.env.EBAY_ENV === 'SANDBOX' ? process.env.EBAY_SANDBOX_CERT_ID : process.env.EBAY_PROD_CERT_ID)
         ),
-        creds: { 
+        creds: {
           env: process.env.EBAY_ENV || 'PRODUCTION',
           appId: process.env.EBAY_ENV === 'SANDBOX' ? process.env.EBAY_SANDBOX_APP_ID : process.env.EBAY_PROD_APP_ID,
           devId: '********',
@@ -175,6 +175,15 @@ router.post('/connect', authenticate, requireRole(...adminRoles), async (req, re
       existingConfig = await IntegrationConfig.create(payload);
     }
 
+    let extraMessage = '';
+    if (platform === 'SHIPSTATION') {
+      const shipstationService = require('../modules/integrations/shipstation.service');
+      const syncRes = await shipstationService.syncOrdersFromShipStation(companyId);
+      if (syncRes.success) {
+        extraMessage = ` (${syncRes.syncedCount || 0} orders synced)`;
+      }
+    }
+
     await IntegrationLog.create({
       companyId,
       platform,
@@ -183,7 +192,7 @@ router.post('/connect', authenticate, requireRole(...adminRoles), async (req, re
       message: `Integration connected and activated for ${platform}`
     });
 
-    res.json({ success: true, message: `Successfully connected to ${platform}` });
+    res.json({ success: true, message: `Successfully connected to ${platform}${extraMessage}` });
   } catch (err) {
     next(err);
   }

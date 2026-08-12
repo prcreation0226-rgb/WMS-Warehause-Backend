@@ -112,4 +112,118 @@ async function saveStoreMappings(req, res, next) {
   }
 }
 
-module.exports = { syncOrders, webhook, getStoreMappings, saveStoreMappings, getStores };
+async function getRates(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const rates = await shipstationService.getRates(companyId, req.body);
+    res.json({ success: true, data: rates });
+  } catch (err) { next(err); }
+}
+
+async function createShipment(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const result = await shipstationService.createShipment(companyId, req.body);
+    res.json({ success: true, data: result });
+  } catch (err) { next(err); }
+}
+
+async function listShipments(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.listShipments(companyId, req.query);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function createV2Label(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.createV2Label(companyId, req.body);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function createReturnLabel(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.createReturnLabel(companyId, req.body);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function createBatchLabels(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.createBatchLabels(companyId, req.body);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function createManifest(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.createManifest(companyId, req.body);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function schedulePickup(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.schedulePickup(companyId, req.body);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function getInventoryLevels(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.getInventoryLevels(companyId);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function getInventoryWarehouses(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.getInventoryWarehouses(companyId);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function getInventoryLocations(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.getInventoryLocations(companyId);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+async function getUsers(req, res, next) {
+  try {
+    const companyId = req.user.companyId || 1;
+    const data = await shipstationService.getUsers(companyId);
+    res.json({ success: true, data });
+  } catch (err) { next(err); }
+}
+
+module.exports = {
+  syncOrders,
+  webhook,
+  getStoreMappings,
+  saveStoreMappings,
+  getStores,
+  getRates,
+  createShipment,
+  listShipments,
+  createV2Label,
+  createReturnLabel,
+  createBatchLabels,
+  createManifest,
+  schedulePickup,
+  getInventoryLevels,
+  getInventoryWarehouses,
+  getInventoryLocations,
+  getUsers
+};

@@ -9,6 +9,10 @@ router.get('/', requireRole('super_admin', 'company_admin', 'warehouse_manager',
 router.get('/scan-order/:barcode', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.scanOrderByBarcode);
 router.post('/scan-order/:id/toggle-check', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.toggleCheck);
 router.post('/scan-order/:id/scan-item', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.scanItem);
+router.post('/scan-order/:id/verify-all', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.verifyAll);
+router.post('/scan-order/:id/clear-all', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.clearAll);
+router.post('/scan-order/:id/items/:itemId/verify', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.verifyItem);
+router.post('/scan-order/:id/items/:itemId/clear', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.clearItem);
 router.post('/scan-order/:id/dispatch', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.dispatchOrder);
 
 router.get('/:id', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'packer'), packingController.getById);

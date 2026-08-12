@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const reportService = require('./reportService');
-const { Report } = require('../models');
+const { Report, Company } = require('../models');
 const { Op } = require('sequelize');
 const dayjs = require('dayjs');
 
@@ -18,11 +18,16 @@ function init() {
         await processScheduledReports();
     });
 
-    // Run order synchronization every 15 minutes
-    cron.schedule('*/15 * * * *', async () => {
-        console.log('[CRON] Starting background orders synchronization for integrations...');
+    // High-frequency live order sync loop (runs every 30 seconds)
+    setInterval(async () => {
         await runAllIntegrationsSync();
-    });
+    }, 30000);
+
+    // Run initial sync 1 second after server start
+    setTimeout(() => {
+        console.log('[CRON] Executing initial live order sync on startup...');
+        runAllIntegrationsSync().catch(e => console.error('[CRON Startup Sync Error]:', e.message));
+    }, 1000);
 }
 
 async function processScheduledReports() {
@@ -93,7 +98,10 @@ async function processScheduledReports() {
     }
 }
 
+let isSyncRunning = false;
 async function runAllIntegrationsSync() {
+    if (isSyncRunning) return;
+    isSyncRunning = true;
     try {
         const companies = await Company.findAll({ attributes: ['id'] });
         for (const company of companies) {
@@ -106,11 +114,11 @@ async function runAllIntegrationsSync() {
             } catch (err) {
                 console.error(`[CRON] ShipStation V2 order sync failed for company ${companyId}:`, err.message);
             }
-            
-            // Direct Order Sync APIs for Shopify, Amazon, eBay are disabled in favor of ShipStation V2 Central Hub
         }
     } catch (err) {
         console.error('[CRON] Error in runAllIntegrationsSync:', err);
+    } finally {
+        isSyncRunning = false;
     }
 }
 

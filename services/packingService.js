@@ -244,6 +244,77 @@ async function getPackingScanOrderByBarcode(barcode, reqUser) {
 
   if (!order) throw new Error('Sales order not found for barcode: ' + barcode);
 
+  // Dynamic ShipStation v2 Address Hydration
+  let recipientName = order.recipientName || '';
+  let addressLine1 = order.addressLine1 || '';
+  let addressLine2 = order.addressLine2 || '';
+  let town = order.town || '';
+  let county = order.county || '';
+  let postcode = order.postcode || '';
+  let country = order.country || '';
+  let phone = order.phone || '';
+  let email = order.email || '';
+
+  // Try to fetch live details from ShipStation v2 API if shipstationOrderId or orderNumber is present
+  if (order.shipstationOrderId || order.orderNumber) {
+    try {
+      const shipstationService = require('../modules/integrations/shipstation.service');
+      const ssData = await shipstationService.fetchLiveShipStationOrderData(order.shipstationOrderId || order.orderNumber, order.companyId);
+      if (ssData) {
+        const shipToObj = ssData.shipTo || ssData.ship_to || ssData.shippingAddress || ssData.shipping_address || {};
+        const freshName = shipToObj.name || shipToObj.full_name || ssData.customer_name || ssData.customerName || (shipToObj.first_name ? `${shipToObj.first_name} ${shipToObj.last_name || ''}`.trim() : null);
+        const freshAddress1 = shipToObj.address_line1 || shipToObj.street1 || shipToObj.address1 || shipToObj.street_1 || '';
+        const freshAddress2 = shipToObj.address_line2 || shipToObj.street2 || shipToObj.address2 || shipToObj.street_2 || '';
+        const freshTown = shipToObj.city_locality || shipToObj.city || shipToObj.town || '';
+        const freshCounty = shipToObj.state_province || shipToObj.state || shipToObj.county || '';
+        const freshPostcode = shipToObj.postal_code || shipToObj.postalCode || shipToObj.zip || '';
+        const freshCountry = shipToObj.country_code || shipToObj.country || '';
+        const freshPhone = shipToObj.phone || ssData.customer_phone || ssData.customerPhone || '';
+        const freshEmail = shipToObj.email || ssData.customerEmail || ssData.customer_email || '';
+
+        if (freshName || freshTown || freshPostcode) {
+          recipientName = freshName || recipientName;
+          addressLine1 = freshAddress1 || addressLine1;
+          addressLine2 = freshAddress2 || addressLine2;
+          town = freshTown || town;
+          county = freshCounty || county;
+          postcode = freshPostcode || postcode;
+          country = freshCountry || country;
+          phone = freshPhone || phone;
+          email = freshEmail || email;
+
+          // Update DB record asynchronously
+          order.update({
+            recipientName,
+            addressLine1,
+            addressLine2,
+            town,
+            county,
+            postcode,
+            country,
+            phone,
+            email
+          }).catch(e => console.error('Error updating order shipTo in DB:', e.message));
+        }
+      }
+    } catch (e) {
+      console.warn('ShipStation live shipTo fetch notice:', e.message);
+    }
+  }
+
+  // Construct dynamic formatted Ship To display text (matching ShipStation format: City State Postcode Country or Recipient, Address...)
+  const addressParts = [town, county, postcode, country].filter(Boolean);
+  let shipToFormatted = '';
+  if (addressParts.length > 0) {
+    shipToFormatted = addressParts.join(' ');
+  } else if (recipientName) {
+    shipToFormatted = recipientName;
+  } else if (order.Client?.name) {
+    shipToFormatted = order.Client.name;
+  } else {
+    shipToFormatted = 'Address Pending';
+  }
+
   // Format order items for Packing Desk and fetch dynamic product images from DB/API
   const items = await Promise.all(order.OrderItems.map(async item => {
     const p = item.Product || {};
@@ -275,11 +346,13 @@ async function getPackingScanOrderByBarcode(barcode, reqUser) {
       productId: item.productId,
       name: p.name || item.bundleHeader || 'Product ' + item.productId,
       sku: p.sku || item.sku || 'N/A',
+      originalSku: item.originalSku || item.sku || p.sku || 'N/A',
+      customizedUrl: item.customizedUrl || null,
       barcode: p.barcode || p.sku || item.barcode || item.sku || '',
       quantity: item.quantity || 1,
       scannedQty: item.scannedQty || 0,
-      bestBeforeDate: item.bestBeforeDate || p.bestBeforeDate || '31-May-2027',
-      batchNumber: item.batchNumber || p.batchNumber || 'N/A',
+      bestBeforeDate: item.bestBeforeDate || p.bestBeforeDate || null,
+      batchNumber: item.batchNumber || p.batchNumber || null,
       productImageUrl: img,
       isBundleParent: item.isBundleParent || false,
       bundleHeader: item.bundleHeader || null
@@ -290,6 +363,17 @@ async function getPackingScanOrderByBarcode(barcode, reqUser) {
     id: order.id,
     orderNumber: order.orderNumber,
     shipstationOrderId: order.shipstationOrderId,
+    marketplace: order.marketplace || order.salesChannel || 'Amazon',
+    recipientName,
+    addressLine1,
+    addressLine2,
+    town,
+    county,
+    postcode,
+    country,
+    phone,
+    email,
+    shipTo: shipToFormatted,
     checkContentRequired: order.checkContentRequired !== false,
     isBundle: order.isBundle || false,
     status: order.status,
@@ -356,6 +440,48 @@ async function dispatchPackingOrder(orderId, reqUser, forceOverride = false) {
   return await shipstationService.createShippingLabelAndDispatch(orderId, reqUser, forceOverride);
 }
 
+async function verifyAllPackingItems(orderId) {
+  const order = await SalesOrder.findByPk(orderId, {
+    include: [{ association: 'OrderItems' }]
+  });
+  if (!order) throw new Error('Sales order not found');
+
+  for (const item of order.OrderItems) {
+    await item.update({ scannedQty: item.quantity || 1 });
+  }
+  return { success: true };
+}
+
+async function clearAllPackingItems(orderId) {
+  const order = await SalesOrder.findByPk(orderId, {
+    include: [{ association: 'OrderItems' }]
+  });
+  if (!order) throw new Error('Sales order not found');
+
+  for (const item of order.OrderItems) {
+    await item.update({ scannedQty: 0 });
+  }
+  return { success: true };
+}
+
+async function verifyPackingItemById(orderId, itemId) {
+  const item = await OrderItem.findOne({
+    where: { id: itemId, salesOrderId: orderId }
+  });
+  if (!item) throw new Error('Item not found in order');
+  await item.update({ scannedQty: item.quantity || 1 });
+  return { success: true, itemId: item.id, scannedQty: item.quantity || 1 };
+}
+
+async function clearPackingItemById(orderId, itemId) {
+  const item = await OrderItem.findOne({
+    where: { id: itemId, salesOrderId: orderId }
+  });
+  if (!item) throw new Error('Item not found in order');
+  await item.update({ scannedQty: 0 });
+  return { success: true, itemId: item.id, scannedQty: 0 };
+}
+
 module.exports = {
   list,
   getById,
@@ -366,5 +492,9 @@ module.exports = {
   getPackingScanOrderByBarcode,
   toggleCheckOrderContent,
   scanPackingItem,
+  verifyAllPackingItems,
+  clearAllPackingItems,
+  verifyPackingItemById,
+  clearPackingItemById,
   dispatchPackingOrder
 };

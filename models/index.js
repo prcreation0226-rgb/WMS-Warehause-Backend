@@ -40,6 +40,7 @@ const CourierService = require('./CourierService');
 const DespatchNoteTemplate = require('./DespatchNoteTemplate');
 const IntegrationConfig = require('./IntegrationConfig');
 const IntegrationLog = require('./IntegrationLog');
+const CustomizationMapping = require('./CustomizationMapping');
 
 
 
@@ -332,4 +333,5 @@ module.exports = {
   CourierService,
   IntegrationConfig,
   IntegrationLog,
+  CustomizationMapping,
 };

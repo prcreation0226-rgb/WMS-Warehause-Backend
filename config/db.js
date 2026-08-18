@@ -14,10 +14,16 @@ const poolConfig = {
   evict: 10000
 };
 
+const isLocal = (process.env.DB_HOST || process.env.MYSQLHOST || 'localhost').includes('localhost') || (process.env.DB_HOST || process.env.MYSQLHOST || '').includes('127.0.0.1');
+
+const useSsl = process.env.MYSQL_SSL === 'true' || (!isLocal && process.env.MYSQL_SSL !== 'false' && (process.env.MYSQL_URL || process.env.DATABASE_URL || process.env.DB_HOST || process.env.MYSQLHOST));
+
 const dialectOptionsConfig = {
   connectTimeout: 60000,
-  keepAlive: true,
-  decimalNumbers: true
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  decimalNumbers: true,
+  ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {})
 };
 
 if (process.env.MYSQL_URL || process.env.DATABASE_URL) {

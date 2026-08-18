@@ -6,16 +6,29 @@ const { Sequelize } = require('sequelize');
 const dialect = process.env.DB_DIALECT || 'sqlite';
 let sequelize;
 
+const poolConfig = {
+  max: 15,
+  min: 0,
+  acquire: 60000,
+  idle: 10000,
+  evict: 10000
+};
+
+const dialectOptionsConfig = {
+  connectTimeout: 60000,
+  keepAlive: true,
+  decimalNumbers: true
+};
+
 if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
   // Priority 1: Use connection string (like mysql://user:pass@host:port/database)
   sequelize = new Sequelize(process.env.MYSQL_URL || process.env.DATABASE_URL, {
     dialect: 'mysql',
     logging: false,
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000
+    pool: poolConfig,
+    dialectOptions: dialectOptionsConfig,
+    retry: {
+      max: 5
     }
   });
 } else if (dialect === 'mysql') {
@@ -31,11 +44,10 @@ if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
     port: dbPort,
     dialect: 'mysql',
     logging: false,
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000
+    pool: poolConfig,
+    dialectOptions: dialectOptionsConfig,
+    retry: {
+      max: 5
     }
   });
 } else {

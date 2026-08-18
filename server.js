@@ -186,8 +186,20 @@ async function start() {
       console.log('---');
     }
 
-    await sequelize.authenticate();
-    console.log('Connected to database successfully.');
+    let connected = false;
+    let attempts = 0;
+    while (!connected && attempts < 5) {
+      try {
+        attempts++;
+        await sequelize.authenticate();
+        connected = true;
+        console.log('Connected to database successfully.');
+      } catch (dbErr) {
+        console.warn(`[DB Connection Attempt ${attempts}/5 Failed]: ${dbErr.message}. Retrying in 3 seconds...`);
+        if (attempts >= 5) throw dbErr;
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
     // SQLite: allow alter (drop/recreate tables) by disabling FK checks during sync
     if (dialect === 'sqlite') {
       await sequelize.query('PRAGMA foreign_keys = OFF');

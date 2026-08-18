@@ -35,18 +35,11 @@ if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
   });
 } else if (dialect === 'mysql') {
   // Priority 2: Use individual variables, with support for Railway naming standards
-  let dbName = process.env.DB_NAME || process.env.MYSQLDATABASE || 'warehouse_wms';
-  let dbUser = process.env.DB_USER || process.env.MYSQLUSER || 'root';
-  let dbPass = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '';
-  let dbHost = process.env.DB_HOST || process.env.MYSQLHOST || 'localhost';
-  let dbPort = process.env.DB_PORT || process.env.MYSQLPORT || 3306;
-
-  // Auto-Fix for Railway Production: If running inside Railway container, switch from public proxy (.proxy.rlwy.net) to internal network (mysql.railway.internal:3306)
-  if (process.env.RAILWAY_ENVIRONMENT && dbHost.includes('.proxy.rlwy.net')) {
-    console.log('[DB Config] Railway container detected. Auto-redirecting from public proxy to internal private network (mysql.railway.internal:3306)');
-    dbHost = 'mysql.railway.internal';
-    dbPort = 3306;
-  }
+  const dbName = process.env.DB_NAME || process.env.MYSQLDATABASE || 'warehouse_wms';
+  const dbUser = process.env.DB_USER || process.env.MYSQLUSER || 'root';
+  const dbPass = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '';
+  const dbHost = process.env.DB_HOST || process.env.MYSQLHOST || 'localhost';
+  const dbPort = process.env.DB_PORT || process.env.MYSQLPORT || 3306;
 
   sequelize = new Sequelize(dbName, dbUser, dbPass, {
     host: dbHost,

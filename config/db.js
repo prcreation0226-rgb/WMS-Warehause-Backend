@@ -14,16 +14,12 @@ const poolConfig = {
   evict: 10000
 };
 
-const isLocal = (process.env.DB_HOST || process.env.MYSQLHOST || 'localhost').includes('localhost') || (process.env.DB_HOST || process.env.MYSQLHOST || '').includes('127.0.0.1');
-
-const useSsl = process.env.MYSQL_SSL === 'true' || (!isLocal && process.env.MYSQL_SSL !== 'false' && (process.env.MYSQL_URL || process.env.DATABASE_URL || process.env.DB_HOST || process.env.MYSQLHOST));
-
 const dialectOptionsConfig = {
   connectTimeout: 60000,
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
   decimalNumbers: true,
-  ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {})
+  ...(process.env.MYSQL_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {})
 };
 
 if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
@@ -39,11 +35,18 @@ if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
   });
 } else if (dialect === 'mysql') {
   // Priority 2: Use individual variables, with support for Railway naming standards
-  const dbName = process.env.DB_NAME || process.env.MYSQLDATABASE || 'warehouse_wms';
-  const dbUser = process.env.DB_USER || process.env.MYSQLUSER || 'root';
-  const dbPass = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '';
-  const dbHost = process.env.DB_HOST || process.env.MYSQLHOST || 'localhost';
-  const dbPort = process.env.DB_PORT || process.env.MYSQLPORT || 3306;
+  let dbName = process.env.DB_NAME || process.env.MYSQLDATABASE || 'warehouse_wms';
+  let dbUser = process.env.DB_USER || process.env.MYSQLUSER || 'root';
+  let dbPass = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '';
+  let dbHost = process.env.DB_HOST || process.env.MYSQLHOST || 'localhost';
+  let dbPort = process.env.DB_PORT || process.env.MYSQLPORT || 3306;
+
+  // Auto-Fix for Railway Production: If running inside Railway container, switch from public proxy (.proxy.rlwy.net) to internal network (mysql.railway.internal:3306)
+  if (process.env.RAILWAY_ENVIRONMENT && dbHost.includes('.proxy.rlwy.net')) {
+    console.log('[DB Config] Railway container detected. Auto-redirecting from public proxy to internal private network (mysql.railway.internal:3306)');
+    dbHost = 'mysql.railway.internal';
+    dbPort = 3306;
+  }
 
   sequelize = new Sequelize(dbName, dbUser, dbPass, {
     host: dbHost,

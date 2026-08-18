@@ -239,20 +239,25 @@ router.post('/disconnect', authenticate, requireRole(...adminRoles), async (req,
 router.post('/sync', authenticate, requireRole(...adminRoles), async (req, res, next) => {
   try {
     const companyId = req.user.companyId;
-    const { platform } = req.body;
+    const { platform, startDate, endDate } = req.body;
 
     if (!platform) {
       return res.status(400).json({ success: false, message: 'Platform name is required' });
     }
 
-    let recordsCount = 0;
     if (platform === 'SHIPSTATION') {
       const shipstationService = require('../modules/integrations/shipstation.service');
-      const resObj = await shipstationService.syncOrdersFromShipStation(companyId);
-      if (!resObj.success) {
-        return res.status(500).json({ success: false, message: `ShipStation Order Sync failed: ${resObj.error || resObj.message}` });
-      }
-      recordsCount = resObj.syncedCount || 0;
+      shipstationService.syncAllFromShipStation(companyId, { startDate, endDate }).then(resObj => {
+        console.log(`[ShipStation Master 12-Domain Sync Complete]: ${resObj?.message}`);
+      }).catch(err => {
+        console.error('[ShipStation Master Sync Error]:', err.message);
+      });
+
+      const dateInfo = (startDate || endDate) ? ` (${startDate || 'Start'} to ${endDate || 'Today'})` : '';
+      return res.json({
+        success: true,
+        message: `⚡ ShipStation 12-Domain Master Sync started${dateInfo}! Products, Warehouses, Inventory, Carriers & Orders are updating in WMS.`
+      });
     } else if (['SHOPIFY_FFD', 'SHOPIFY_WHOLESALE', 'AMAZON', 'EBAY'].includes(platform)) {
       return res.json({
         success: true,

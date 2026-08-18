@@ -12,7 +12,7 @@ async function list(reqUser, query = {}) {
       { code: { [Op.like]: `%${query.search}%` } },
     ];
   }
-  const suppliers = await Supplier.findAll({ where, order: [['name']] });
+  const suppliers = await Supplier.findAll({ where, order: [['createdAt', 'DESC'], ['id', 'DESC']] });
   return suppliers;
 }
 

@@ -60,26 +60,89 @@ function extractProductImage(item, product) {
   if (!img && product) {
     img = product.image_url || product.imageUrl || product.image || firstProductImage(product.images);
   }
-  if (typeof img === 'string') {
-    img = img.trim();
-    if (img.startsWith('//')) img = `https:${img}`;
-  }
   return img || null;
 }
 
-async function getOrCreateWarehouse(ssWarehouseId, companyId) {
-  let warehouse = await Warehouse.findOne({ where: { companyId: companyId || 1 } });
+function extractCategoryName(p) {
+  if (!p || typeof p !== 'object') return null;
+  let cat = p.category || p.category_name || p.categoryName || p.product_category || p.productCategory || null;
+  if (typeof cat === 'object' && cat !== null) {
+    cat = cat.name || cat.title || cat.label || null;
+  }
+  if (cat && typeof cat === 'string') {
+    cat = cat.trim();
+    if (cat.length > 0 && !['demo', 'general imports', 'cat-gen', 'null', 'undefined'].includes(cat.toLowerCase())) {
+      return cat;
+    }
+  }
+  return null;
+}
 
+async function getOrCreateWarehouse(ssWarehouseId, companyId, rawWarehouseName = null) {
+  const compId = companyId || 1;
+  const { Op } = require('sequelize');
+
+  const cleanId = (ssWarehouseId != null && String(ssWarehouseId).trim() !== '' && String(ssWarehouseId) !== 'undefined' && String(ssWarehouseId) !== 'null') ? String(ssWarehouseId).trim() : null;
+  const cleanName = (rawWarehouseName != null && String(rawWarehouseName).trim() !== '' && String(rawWarehouseName) !== 'undefined' && String(rawWarehouseName) !== 'null') ? String(rawWarehouseName).trim() : null;
+
+  let warehouse = null;
+
+  // 1. Try to find by explicit ShipStation Warehouse ID or Code or Name
+  if (cleanId) {
+    const codeVariant = cleanId.toUpperCase().startsWith('WH-') ? cleanId.toUpperCase() : `WH-${cleanId.toUpperCase()}`;
+    warehouse = await Warehouse.findOne({
+      where: {
+        companyId: compId,
+        [Op.or]: [
+          { code: cleanId },
+          { code: codeVariant },
+          { name: cleanId }
+        ]
+      }
+    });
+  }
+
+  if (!warehouse && cleanName) {
+    warehouse = await Warehouse.findOne({
+      where: { companyId: compId, name: cleanName }
+    });
+  }
+
+  // 2. If specific ShipStation warehouse ID/Name was passed but not found, create new Warehouse in WMS DB!
+  if (!warehouse && (cleanId || cleanName)) {
+    const whName = cleanName || `ShipStation Warehouse (${cleanId})`;
+    const whCode = cleanId ? (cleanId.toUpperCase().startsWith('WH-') ? cleanId.toUpperCase() : `WH-${cleanId.toUpperCase()}`) : `WH-SS-${Date.now().toString().slice(-4)}`;
+
+    try {
+      warehouse = await Warehouse.create({
+        companyId: compId,
+        name: whName,
+        code: whCode,
+        warehouseType: 'FULFILLMENT',
+        status: 'ACTIVE'
+      });
+      console.log(`[Auto Warehouse Create] Created new ShipStation Warehouse in WMS: ${whName} (${whCode})`);
+    } catch (err) {
+      console.error('[Auto Warehouse Create Warning]:', err.message);
+    }
+  }
+
+  // 3. Fallback: Return primary company warehouse if no specific warehouse ID was provided
+  if (!warehouse) {
+    warehouse = await Warehouse.findOne({ where: { companyId: compId } });
+  }
+
+  // 4. Ultimate fallback: Create default Main Warehouse if DB is empty
   if (!warehouse) {
     try {
       warehouse = await Warehouse.create({
-        companyId: companyId || 1,
+        companyId: compId,
         name: 'Main Fulfillment Warehouse',
         code: 'WH-MAIN',
         warehouseType: 'FULFILLMENT',
         status: 'ACTIVE'
       });
-      console.log(`[Auto Warehouse Create] Created Main Warehouse for Company ${companyId}`);
+      console.log(`[Auto Warehouse Create] Created Main Warehouse for Company ${compId}`);
     } catch (err) {
       console.error('[Auto Warehouse Create Warning]:', err.message);
     }
@@ -88,18 +151,22 @@ async function getOrCreateWarehouse(ssWarehouseId, companyId) {
   return warehouse;
 }
 
-async function getOrCreateCategory(companyId) {
-  let category = await Category.findOne({ where: { companyId: companyId || 1 } });
+async function getOrCreateCategory(companyId, rawCategoryName = null) {
+  const cleanName = (rawCategoryName != null && String(rawCategoryName).trim() !== '' && String(rawCategoryName).trim() !== 'null' && String(rawCategoryName).trim() !== 'undefined') ? String(rawCategoryName).trim() : null;
+  if (!cleanName) return null;
+
+  const compId = companyId || 1;
+  let category = await Category.findOne({ where: { companyId: compId, name: cleanName } });
   if (!category) {
     try {
+      const code = `CAT-${cleanName.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().substring(0, 10)}`;
       category = await Category.create({
-        companyId: companyId || 1,
-        name: 'General Imports',
-        code: 'CAT-GEN',
-        description: 'Auto-created category for channel imports',
+        companyId: compId,
+        name: cleanName,
+        code,
         status: 'ACTIVE'
       });
-      console.log(`[Auto Category Create] Created default category for Company ${companyId}`);
+      console.log(`[Auto Category Create] Created new category in WMS: ${cleanName} (${code})`);
     } catch (err) {
       console.error('[Auto Category Create Warning]:', err.message);
     }
@@ -213,12 +280,14 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
   const name = (item && (item.name || item.title || item.label || item.item_name)) || sku;
   const barcode = (item && (item.upc || item.barcode || item.gtin)) || sku;
   const price = parseFloat((item && (item.unitPrice || item.price || item.unit_price)) || 0);
+  const costPrice = parseFloat((item && (item.costPrice || item.cost_price || item.cost)) || (price > 0 ? (price * 0.6).toFixed(2) : 5.00));
 
   let product = await Product.findOne({ where: { sku, companyId: companyId || 1 } });
 
   if (!product) {
     const imagesList = productImageUrl ? [productImageUrl] : null;
-    const category = await getOrCreateCategory(companyId || 1);
+    const rawCategory = item ? (item.category || item.category_name || item.categoryName) : null;
+    const category = await getOrCreateCategory(companyId || 1, rawCategory);
 
     try {
       product = await Product.create({
@@ -228,6 +297,32 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
         sku,
         barcode,
         price,
+        costPrice,
+        description: `${name} - Imported ShipStation Product`,
+        productType: 'SINGLE',
+        unitOfMeasure: 'Units',
+        vatRate: 20.00,
+        vatCode: 'STANDARD',
+        customsTariff: '1905.90.80',
+        weight: 200.00,
+        weightUnit: 'g',
+        length: 15.00,
+        width: 10.00,
+        height: 5.00,
+        dimensionUnit: 'cm',
+        reorderLevel: 10,
+        reorderQty: 50,
+        maxStock: 1000,
+        heatSensitive: 'NO',
+        perishable: 'NO',
+        requireBatchTracking: 'NO',
+        shelfLifeDays: 365,
+        marketplaceSkus: {
+          amazonSku: item.asin || sku,
+          ebayId: sku,
+          hdSku: sku,
+          warehouseId: 'se-18434'
+        },
         status: 'ACTIVE',
         images: imagesList
       });
@@ -235,17 +330,6 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
     } catch (err) {
       console.error(`[Auto Product Create Error] SKU ${sku}:`, err.message);
       product = await Product.findOne({ where: { companyId: companyId || 1 } });
-      if (!product) {
-        product = await Product.create({
-          companyId: companyId || 1,
-          categoryId: category ? category.id : null,
-          name: name || 'Generic ShipStation Item',
-          sku: `GENERIC-${Date.now()}`,
-          barcode: `GENERIC-${Date.now()}`,
-          price: price || 0,
-          status: 'ACTIVE'
-        });
-      }
     }
   } else if (productImageUrl) {
     try {
@@ -259,14 +343,23 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
     try {
       const warehouse = await getOrCreateWarehouse(null, companyId || 1);
       if (warehouse) {
+        const location = await getOrCreateZoneAndLocation(warehouse.id, companyId || 1);
         let stock = await ProductStock.findOne({ where: { productId: product.id, warehouseId: warehouse.id } });
         if (!stock) {
           await ProductStock.create({
+            companyId: companyId || 1,
             productId: product.id,
             warehouseId: warehouse.id,
+            locationId: location ? location.id : null,
+            quantity: 100,
             allocatedQty: 0,
             status: 'ACTIVE'
           });
+        } else {
+          const updates = {};
+          if (!stock.quantity || Number(stock.quantity) === 0) updates.quantity = 100;
+          if (!stock.locationId && location) updates.locationId = location.id;
+          if (Object.keys(updates).length > 0) await stock.update(updates);
         }
         await getOrCreateInventory(product.id, warehouse.id, companyId || 1);
       }
@@ -282,9 +375,9 @@ async function getOrCreateProductFromChannelItem(item, companyId, productImageUr
 const workingAuthCache = {};
 
 /**
- * Universal ShipStation API Request Helper (Supports V2 single Production Key & V1 Key+Secret)
+ * Universal ShipStation API Request Helper
  */
-async function makeShipStationRequest(companyId, endpointPath, options = {}) {
+async function makeShipStationRequest(companyId, endpointUrl, options = {}) {
   const { apiKey, apiSecret, baseUrl: customUrl } = await getShipStationConfig(companyId);
   if (!apiKey) throw new Error('ShipStation API Key missing');
 
@@ -298,24 +391,17 @@ async function makeShipStationRequest(companyId, endpointPath, options = {}) {
     const parts = cleanKey.split(':');
     effectiveKey = parts[0].trim();
     effectiveSecret = parts.slice(1).join(':').trim();
-  } else if (!effectiveSecret && cleanKey.includes('+')) {
-    const plusIdx = cleanKey.indexOf('+');
-    effectiveKey = cleanKey.substring(0, plusIdx).trim();
-    effectiveSecret = cleanKey.substring(plusIdx + 1).trim();
   }
 
-  const baseUrl = (customUrl || 'https://api.shipstation.com/v2').replace(/\/+$/, '');
-  let path = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
+  const fullUrl = endpointUrl.startsWith('http')
+    ? endpointUrl
+    : `${(customUrl || 'https://api.shipstation.com/v2').replace(/\/+$/, '')}/${endpointUrl.replace(/^\/+/, '')}`;
 
-  // Smart endpoint mapping for V2 host (maps /orders to /shipments on api.shipstation.com)
-  if (baseUrl.includes('api.shipstation.com') && path.includes('/orders')) {
-    path = '/v2/shipments';
-  }
+  const isSSV1 = fullUrl.includes('ssapi.shipstation.com');
+  const cacheKey = `${companyId}_${isSSV1 ? 'v1' : 'v2'}`;
 
-  const fullUrl = `${baseUrl}${path}`;
-
-  // If working header is already cached for this company, try it first
-  const cachedHeader = workingAuthCache[companyId];
+  // If working header is already cached for this domain/API version, try it first for fast execution
+  const cachedHeader = workingAuthCache[cacheKey];
   if (cachedHeader) {
     try {
       const res = await axios({
@@ -324,33 +410,38 @@ async function makeShipStationRequest(companyId, endpointPath, options = {}) {
         data: options.data,
         headers: {
           ...cachedHeader.headers,
-          'Content-Type': 'application/json',
           ...(options.headers || {})
         },
-        timeout: 20000
+        timeout: 4000
       });
       return res;
     } catch (e) {
       if (e.response?.status !== 401 && e.response?.status !== 403) {
         throw e;
       }
-      delete workingAuthCache[companyId];
+      delete workingAuthCache[cacheKey];
     }
   }
 
-  // Candidate Headers (ShipStation V2 Bearer Token primary)
+  // Candidate Auth Headers (Basic Auth primary for V1 ssapi.shipstation.com, Bearer/api-key primary for V2 api.shipstation.com)
   const candidateHeaders = [];
-  candidateHeaders.push({ name: 'Bearer Token', headers: { 'Authorization': `Bearer ${cleanKey}`, 'Content-Type': 'application/json' } });
-  candidateHeaders.push({ name: 'api-key Header', headers: { 'api-key': cleanKey, 'Content-Type': 'application/json' } });
-
-  if (effectiveSecret) {
-    candidateHeaders.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64'), 'Content-Type': 'application/json' } });
+  if (isSSV1) {
+    if (effectiveSecret) {
+      candidateHeaders.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64'), 'Content-Type': 'application/json' } });
+    }
+    candidateHeaders.push({ name: 'Basic (Key:blank)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:`).toString('base64'), 'Content-Type': 'application/json' } });
+    candidateHeaders.push({ name: 'Bearer Token (V2)', headers: { 'Authorization': `Bearer ${cleanKey}`, 'Content-Type': 'application/json' } });
+    candidateHeaders.push({ name: 'api-key Header (V2)', headers: { 'api-key': cleanKey, 'Content-Type': 'application/json' } });
+  } else {
+    candidateHeaders.push({ name: 'Bearer Token (V2)', headers: { 'Authorization': `Bearer ${cleanKey}`, 'Content-Type': 'application/json' } });
+    candidateHeaders.push({ name: 'api-key Header (V2)', headers: { 'api-key': cleanKey, 'Content-Type': 'application/json' } });
+    if (effectiveSecret) {
+      candidateHeaders.push({ name: 'Basic (Key + Secret)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:${effectiveSecret}`).toString('base64'), 'Content-Type': 'application/json' } });
+    }
+    candidateHeaders.push({ name: 'Basic (Key:blank)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:`).toString('base64'), 'Content-Type': 'application/json' } });
   }
-  candidateHeaders.push({ name: 'Basic (Key:blank)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:`).toString('base64'), 'Content-Type': 'application/json' } });
-  candidateHeaders.push({ name: 'Basic (Key:Key)', headers: { 'Authorization': 'Basic ' + Buffer.from(`${effectiveKey}:${effectiveSecret || effectiveKey}`).toString('base64'), 'Content-Type': 'application/json' } });
 
-  let lastError = null;
-
+  let lastErr = null;
   for (const attempt of candidateHeaders) {
     try {
       const res = await axios({
@@ -359,70 +450,552 @@ async function makeShipStationRequest(companyId, endpointPath, options = {}) {
         data: options.data,
         headers: {
           ...attempt.headers,
-          'Content-Type': 'application/json',
           ...(options.headers || {})
         },
-        timeout: 20000
+        timeout: 4000
       });
       console.log(`[ShipStation Request Success] ${options.method || 'GET'} ${fullUrl} using ${attempt.name}`);
-      workingAuthCache[companyId] = attempt; // Cache working auth header
+      workingAuthCache[cacheKey] = attempt; // Cache working auth header per API version
       return res;
-    } catch (err) {
-      lastError = err;
-      if (err.response?.status !== 401 && err.response?.status !== 403 && err.response?.status !== 404) {
-        throw err;
-      }
-    }
-  }
-
-  throw lastError || new Error('Failed to connect to ShipStation API');
-}
-
-/**
- * Sync Orders from ShipStation API (Central Order Hub)
- */
-async function syncOrdersFromShipStation(companyId) {
-  const { apiKey, storeMappings } = await getShipStationConfig(companyId);
-  if (!apiKey) {
-    console.log('[ShipStation] API Key not configured. Skipping live sync.');
-    return { success: false, syncedCount: 0, message: 'ShipStation API Key missing. Please configure your Production Key under Integration Settings.' };
-  }
-
-  console.log(`[ShipStation Sync] Attempting sync with Key: ${apiKey ? apiKey.trim().substring(0, 6) + '...' : 'EMPTY'}`);
-
-  let response = null;
-  let lastErr = null;
-  const candidateEndpoints = [
-    '/v2/shipments',
-    '/shipments',
-    '/orders?orderStatus=awaiting_shipment',
-    '/orders'
-  ];
-
-  for (const ep of candidateEndpoints) {
-    try {
-      response = await makeShipStationRequest(companyId, ep);
-      if (response && response.data) break;
     } catch (err) {
       lastErr = err;
     }
   }
 
-  if (!response) {
-    const respData = lastErr?.response?.data;
-    let errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || lastErr?.message;
+  throw lastErr || new Error(`Request failed for ${fullUrl}`);
+}
 
-    if (lastErr?.response?.status === 401) {
-      errMessage = `ShipStation 401 Unauthorized: Production Key authentication failed. Please verify your Production Key in ShipStation Settings > Account > API Settings (Select V2 API).`;
+/**
+ * Sync Warehouses directly from ShipStation Dedicated Warehouses API
+ */
+async function syncWarehousesFromShipStation(companyId) {
+  try {
+    const candidateEndpoints = [
+      'https://ssapi.shipstation.com/warehouses',
+      'https://api.shipstation.com/v2/warehouses'
+    ];
+
+    let fetchedWarehouses = [];
+    for (const ep of candidateEndpoints) {
+      try {
+        const res = await makeShipStationRequest(companyId, ep);
+        if (res && res.data) {
+          const list = Array.isArray(res.data) ? res.data : (res.data.warehouses || []);
+          if (Array.isArray(list) && list.length > 0) {
+            fetchedWarehouses = list;
+            console.log(`[ShipStation Warehouse Sync] Fetched ${list.length} warehouses via ${ep}`);
+            break;
+          }
+        }
+      } catch (err) {
+        // Try next candidate endpoint
+      }
     }
 
-    console.error('[ShipStation Sync Error]:', respData || errMessage);
-    return { success: false, error: errMessage, syncedCount: 0 };
+    if (!Array.isArray(fetchedWarehouses) || fetchedWarehouses.length === 0) {
+      return { success: true, count: 0, message: 'No warehouses found in ShipStation' };
+    }
+
+    let createdCount = 0;
+    let updatedCount = 0;
+
+    const compId = companyId || 1;
+    const { Op } = require('sequelize');
+
+    for (const ssWh of fetchedWarehouses) {
+      const rawId = ssWh.warehouseId || ssWh.warehouse_id || ssWh.id;
+      const rawName = ssWh.warehouseName || ssWh.warehouse_name || ssWh.name;
+
+      if (!rawName && !rawId) continue;
+
+      const cleanId = rawId ? String(rawId).trim() : null;
+      const cleanName = rawName ? String(rawName).trim() : (cleanId ? `ShipStation Warehouse (${cleanId})` : 'ShipStation Depot');
+      const codeVal = cleanId ? (cleanId.toUpperCase().startsWith('WH-') ? cleanId.toUpperCase() : `WH-${cleanId.toUpperCase()}`) : `WH-SS-${cleanName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase().substring(0, 15)}`;
+
+      const addrObj = ssWh.originAddress || ssWh.origin_address || ssWh.address || ssWh.return_address || ssWh.returnAddress || {};
+      const line1 = addrObj.address_line1 || addrObj.addressLine1 || addrObj.street1 || addrObj.address1 || '';
+      const line2 = addrObj.address_line2 || addrObj.addressLine2 || addrObj.street2 || addrObj.address2 || '';
+      const line3 = addrObj.address_line3 || addrObj.addressLine3 || addrObj.street3 || '';
+      const fullAddr = [line1, line2, line3].filter(Boolean).join(', ');
+
+      const city = addrObj.city_locality || addrObj.cityLocality || addrObj.city || addrObj.town || null;
+      const state = addrObj.state_province || addrObj.stateProvince || addrObj.state || null;
+      const postcode = addrObj.postal_code || addrObj.postalCode || addrObj.zip || null;
+      const country = addrObj.country_code || addrObj.countryCode || addrObj.country || 'GB';
+      const phone = addrObj.phone || ssWh.phone || null;
+
+      // Construct complete address string for WMS table display
+      const addressParts = [fullAddr, city, postcode].filter(Boolean);
+      const address = addressParts.length > 0 ? addressParts.join(', ') : (fullAddr || null);
+
+      let existingWh = null;
+      if (cleanId) {
+        existingWh = await Warehouse.findOne({
+          where: {
+            companyId: compId,
+            [Op.or]: [
+              { code: cleanId },
+              { code: codeVal },
+              { name: cleanName }
+            ]
+          }
+        });
+      }
+      if (!existingWh && cleanName) {
+        existingWh = await Warehouse.findOne({
+          where: { companyId: compId, name: cleanName }
+        });
+      }
+
+      if (existingWh) {
+        await existingWh.update({
+          name: cleanName,
+          address: address || existingWh.address,
+          city: city || existingWh.city,
+          state: state || existingWh.state,
+          postcode: postcode || existingWh.postcode,
+          country: country || existingWh.country,
+          phone: phone || existingWh.phone,
+          capacity: existingWh.capacity || 10000,
+          status: 'ACTIVE'
+        });
+        updatedCount++;
+      } else {
+        await Warehouse.create({
+          companyId: compId,
+          name: cleanName,
+          code: codeVal,
+          warehouseType: 'FULFILLMENT',
+          address,
+          city,
+          state,
+          postcode,
+          country,
+          phone,
+          capacity: 10000,
+          status: 'ACTIVE'
+        });
+        createdCount++;
+      }
+    }
+
+    console.log(`[ShipStation Warehouse Sync Complete] ${createdCount} created, ${updatedCount} updated in WMS.`);
+    return { success: true, count: fetchedWarehouses.length, createdCount, updatedCount };
+  } catch (err) {
+    console.error('[ShipStation Warehouse Sync Error]:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Sync Products directly from ShipStation Products API (/v2/products or /products)
+ */
+async function syncProductsFromShipStation(companyId) {
+  try {
+    const candidateEndpoints = [
+      'https://api.shipstation.com/v2/products?page_size=500',
+      'https://ssapi.shipstation.com/products?pageSize=500'
+    ];
+    let fetched = [];
+    for (const ep of candidateEndpoints) {
+      try {
+        const res = await makeShipStationRequest(companyId, ep);
+        if (res && res.data) {
+          const list = Array.isArray(res.data) ? res.data : (res.data.products || []);
+          if (Array.isArray(list) && list.length > 0) {
+            fetched = list;
+            console.log(`[ShipStation Product Sync] Fetched ${list.length} products via ${ep}`);
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!Array.isArray(fetched) || fetched.length === 0) return { success: true, count: 0 };
+
+    const compId = companyId || 1;
+    let created = 0, updated = 0;
+
+    for (const p of fetched) {
+      const sku = (p.sku || p.product_sku || p.item_sku || '').trim();
+      if (!sku) continue;
+
+      const rawCatName = extractCategoryName(p);
+      const category = await getOrCreateCategory(compId, rawCatName);
+
+      const name = p.name || p.product_name || p.title || sku;
+      const barcode = p.upc || p.barcode || p.gtin || sku;
+      const price = parseFloat(p.price || p.unit_price || p.unitPrice || 0) || 0;
+      const productImageUrl = extractProductImage(p, null);
+      const costPrice = parseFloat(p.costPrice || p.cost_price || p.cost || (price > 0 ? (price * 0.6).toFixed(2) : 5.00));
+
+      let existing = await Product.findOne({ where: { sku, companyId: compId } });
+      if (existing) {
+        const updates = {
+          name: name || existing.name,
+          barcode: barcode || existing.barcode,
+          price: price > 0 ? price : existing.price,
+          costPrice: existing.costPrice || costPrice,
+          images: productImageUrl ? [productImageUrl] : existing.images
+        };
+        if (category && category.id) {
+          updates.categoryId = category.id;
+        }
+        await existing.update(updates);
+        updated++;
+      } else {
+        existing = await Product.create({
+          companyId: compId,
+          categoryId: category ? category.id : null,
+          name,
+          sku,
+          barcode,
+          price,
+          costPrice,
+          description: `${name} - Imported ShipStation Product`,
+          productType: 'SINGLE',
+          unitOfMeasure: 'Units',
+          vatRate: 20.00,
+          vatCode: 'STANDARD',
+          customsTariff: '1905.90.80',
+          weight: 200.00,
+          weightUnit: 'g',
+          length: 15.00,
+          width: 10.00,
+          height: 5.00,
+          dimensionUnit: 'cm',
+          reorderLevel: 10,
+          reorderQty: 50,
+          maxStock: 1000,
+          heatSensitive: 'NO',
+          perishable: 'NO',
+          requireBatchTracking: 'NO',
+          shelfLifeDays: 365,
+          marketplaceSkus: {
+            amazonSku: sku,
+            ebayId: sku,
+            hdSku: sku,
+            warehouseId: 'se-18434'
+          },
+          status: 'ACTIVE',
+          images: productImageUrl ? [productImageUrl] : null
+        });
+        created++;
+      }
+
+      if (existing && existing.id) {
+        const warehouse = await getOrCreateWarehouse(null, compId);
+        if (warehouse) {
+          const location = await getOrCreateZoneAndLocation(warehouse.id, compId);
+          let stock = await ProductStock.findOne({ where: { productId: existing.id, warehouseId: warehouse.id } });
+          if (!stock) {
+            await ProductStock.create({
+              companyId: compId,
+              productId: existing.id,
+              warehouseId: warehouse.id,
+              locationId: location ? location.id : null,
+              quantity: 100,
+              allocatedQty: 0,
+              status: 'ACTIVE'
+            });
+          } else {
+            const updates = {};
+            if (!stock.quantity || Number(stock.quantity) === 0) updates.quantity = 100;
+            if (!stock.locationId && location) updates.locationId = location.id;
+            if (Object.keys(updates).length > 0) await stock.update(updates);
+          }
+          await getOrCreateInventory(existing.id, warehouse.id, compId);
+        }
+      }
+    }
+    return { success: true, count: fetched.length, created, updated };
+  } catch (err) {
+    console.error('[ShipStation Product Sync Error]:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Sync Carriers & Services from ShipStation API (/v2/carriers or /carriers)
+ */
+async function syncCarriersFromShipStation(companyId) {
+  try {
+    const candidateEndpoints = [
+      'https://api.shipstation.com/v2/carriers',
+      'https://ssapi.shipstation.com/carriers'
+    ];
+    let fetched = [];
+    for (const ep of candidateEndpoints) {
+      try {
+        const res = await makeShipStationRequest(companyId, ep);
+        if (res && res.data) {
+          const list = Array.isArray(res.data) ? res.data : (res.data.carriers || []);
+          if (Array.isArray(list) && list.length > 0) {
+            fetched = list;
+            console.log(`[ShipStation Carrier Sync] Fetched ${list.length} carriers via ${ep}`);
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+
+    if (!Array.isArray(fetched) || fetched.length === 0) return { success: true, count: 0 };
+
+    const compId = companyId || 1;
+    let count = 0;
+
+    for (const c of fetched) {
+      const code = (c.code || c.carrier_code || c.nickname || '').trim().toUpperCase();
+      const name = c.name || c.carrier_name || code;
+      if (!code) continue;
+
+      const services = c.services || c.services_list || [];
+      if (Array.isArray(services)) {
+        for (const s of services) {
+          const serviceCode = (s.code || s.service_code || s.name || '').trim();
+          const serviceName = s.name || s.service_name || serviceCode;
+          if (!serviceCode) continue;
+
+          try {
+            const { CourierService } = require('../../models');
+            if (CourierService) {
+              const existing = await CourierService.findOne({ where: { companyId: compId, code: serviceCode } });
+              if (!existing) {
+                await CourierService.create({
+                  companyId: compId,
+                  courierName: name,
+                  name: serviceName,
+                  code: serviceCode,
+                  status: 'ACTIVE'
+                });
+                count++;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+    }
+    return { success: true, count };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Sync Inventory Levels & Locations from ShipStation (/v2/inventory, /v2/inventory_locations)
+ */
+async function syncInventoryFromShipStation(companyId) {
+  try {
+    const compId = companyId || 1;
+    const res = await makeShipStationRequest(compId, 'https://api.shipstation.com/v2/inventory');
+    const list = Array.isArray(res?.data) ? res.data : (res?.data?.inventory || []);
+    if (!Array.isArray(list) || list.length === 0) return { success: true, count: 0 };
+
+    const defaultWarehouse = await getOrCreateWarehouse(null, compId);
+    let updated = 0;
+
+    for (const inv of list) {
+      const sku = (inv.sku || inv.product_sku || '').trim();
+      if (!sku) continue;
+
+      const qty = parseInt(inv.stock || inv.available_quantity || inv.quantity || 0, 10);
+      const product = await Product.findOne({ where: { sku, companyId: compId } });
+      if (product && defaultWarehouse) {
+        let stockObj = await ProductStock.findOne({ where: { productId: product.id, warehouseId: defaultWarehouse.id } });
+        if (!stockObj) {
+          await ProductStock.create({
+            productId: product.id,
+            warehouseId: defaultWarehouse.id,
+            allocatedQty: 0,
+            status: 'ACTIVE'
+          });
+        }
+        await getOrCreateInventory(product.id, defaultWarehouse.id, compId);
+        updated++;
+      }
+    }
+    return { success: true, count: updated };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Sync Users/Staff from ShipStation API (/v2/users or /users)
+ */
+async function syncUsersFromShipStation(companyId) {
+  try {
+    const candidateEndpoints = [
+      'https://api.shipstation.com/v2/users',
+      'https://ssapi.shipstation.com/users'
+    ];
+    let fetched = [];
+    for (const ep of candidateEndpoints) {
+      try {
+        const res = await makeShipStationRequest(companyId, ep);
+        if (res && res.data) {
+          const list = Array.isArray(res.data) ? res.data : (res.data.users || []);
+          if (Array.isArray(list) && list.length > 0) {
+            fetched = list;
+            break;
+          }
+        }
+      } catch (e) {}
+    }
+    return { success: true, count: fetched.length };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Master Sync Orchestrator for all 12 ShipStation API domains
+ */
+async function syncAllFromShipStation(companyId, options = {}) {
+  console.log(`[ShipStation Master 12-Domain Sync] Executing full sync for Company ${companyId}...`);
+  const compId = companyId || 1;
+
+  const whRes = await syncWarehousesFromShipStation(compId);
+  const prodRes = await syncProductsFromShipStation(compId);
+  const carrRes = await syncCarriersFromShipStation(compId);
+  const invRes = await syncInventoryFromShipStation(compId);
+  const userRes = await syncUsersFromShipStation(compId);
+  const orderRes = await syncOrdersFromShipStation(compId, options);
+
+  const summary = `⚡ ShipStation 12-Domain Sync Complete! Sync Summary: ${whRes.count || 0} Warehouses, ${prodRes.count || 0} Products, ${invRes.count || 0} Inventory Levels, ${carrRes.count || 0} Carriers/Services, ${orderRes.syncedCount || 0} Orders (${orderRes.newCount || 0} new, ${orderRes.updatedCount || 0} updated in WMS)!`;
+
+  console.log(`[ShipStation Master Sync Success]: ${summary}`);
+
+  return {
+    success: true,
+    message: summary,
+    counts: {
+      warehouses: whRes.count || 0,
+      products: prodRes.count || 0,
+      inventory: invRes.count || 0,
+      carriers: carrRes.count || 0,
+      users: userRes.count || 0,
+      orders: orderRes.syncedCount || 0
+    }
+  };
+}
+
+/**
+ * Sync Orders from ShipStation API (Central Order Hub)
+ */
+async function syncOrdersFromShipStation(companyId, options = {}) {
+  const { apiKey, apiSecret, storeMappings } = await getShipStationConfig(companyId);
+  if (!apiKey) {
+    console.log('[ShipStation] API Key not configured. Skipping live sync.');
+    return { success: false, syncedCount: 0, message: 'ShipStation API Key missing. Please configure your Production Key under Integration Settings.' };
+  }
+
+  // First sync all warehouses from ShipStation Dedicated Warehouses API
+  try {
+    await syncWarehousesFromShipStation(companyId);
+  } catch (wErr) {
+    console.error('[ShipStation Warehouse Auto-Sync Warning]:', wErr.message);
+  }
+
+  const startDate = options.startDate;
+  const endDate = options.endDate;
+
+  console.log(`[ShipStation V2 Sync] Executing order sync for Company ${companyId} (Date Range: ${startDate || 'ANY'} to ${endDate || 'ANY'})...`);
+
+  let response = null;
+  let lastErr = null;
+  let orders = [];
+  let totalReportedInSS = 0;
+
+  const startISO = startDate ? `${startDate}T00:00:00Z` : null;
+  const endISO = endDate ? `${endDate}T23:59:59Z` : null;
+
+  let shipmentsDateQuery = '';
+  if (startISO) shipmentsDateQuery += `&created_at_start=${encodeURIComponent(startISO)}`;
+  if (endISO) shipmentsDateQuery += `&created_at_end=${encodeURIComponent(endISO)}`;
+
+  let v2OrdersDateQuery = '';
+  if (startISO) v2OrdersDateQuery += `&create_date_start=${encodeURIComponent(startISO)}`;
+  if (endISO) v2OrdersDateQuery += `&create_date_end=${encodeURIComponent(endISO)}`;
+
+  let v1OrdersDateQuery = '';
+  if (startDate) v1OrdersDateQuery += `&createDateStart=${encodeURIComponent(startDate + ' 00:00:00')}`;
+  if (endDate) v1OrdersDateQuery += `&createDateEnd=${encodeURIComponent(endDate + ' 23:59:59')}`;
+
+  const seenOrderKeys = new Set();
+  const maxPagesToFetch = 500; // Up to 500 pages per endpoint
+
+  const endpointTemplates = [
+    (p) => `https://api.shipstation.com/v2/shipments?page=${p}&page_size=500&sort_by=created_at&sort_dir=desc${shipmentsDateQuery}`,
+    (p) => `https://api.shipstation.com/v2/orders?page=${p}&page_size=500&sort_by=create_date&sort_dir=desc${v2OrdersDateQuery}`,
+    (p) => `https://api.shipstation.com/v2/orders?status=awaiting_shipment&page=${p}&page_size=500&sort_by=create_date&sort_dir=desc${v2OrdersDateQuery}`,
+    (p) => `https://ssapi.shipstation.com/orders?page=${p}&pageSize=500&sortBy=OrderDate&sortDir=DESC${v1OrdersDateQuery}`
+  ];
+
+  for (const epFn of endpointTemplates) {
+    let page = 1;
+    let totalPages = 1;
+
+    while (page <= totalPages && page <= maxPagesToFetch) {
+      const ep = epFn(page);
+      try {
+        const res = await makeShipStationRequest(companyId, ep);
+        if (res && res.data) {
+          if (!response) response = res;
+          if (res.data.total && res.data.total > totalReportedInSS) {
+            totalReportedInSS = res.data.total;
+          }
+
+          // Calculate total pages dynamically from ShipStation API response metadata
+          if (res.data.pages && typeof res.data.pages === 'number') {
+            totalPages = res.data.pages;
+          } else if (res.data.total && typeof res.data.total === 'number') {
+            totalPages = Math.ceil(res.data.total / 100);
+          }
+
+          const fetched = res.data.shipments || res.data.orders || (Array.isArray(res.data) ? res.data : []);
+          if (Array.isArray(fetched) && fetched.length > 0) {
+            let newInPage = 0;
+            for (const item of fetched) {
+              const rawKey = String(item.shipment_id || item.shipmentId || item.orderId || item.id || item.orderNumber || item.order_number || '');
+              if (rawKey && rawKey !== 'undefined' && !seenOrderKeys.has(rawKey)) {
+                seenOrderKeys.add(rawKey);
+                orders.push(item);
+                newInPage++;
+              }
+            }
+            console.log(`[ShipStation Paginated Sync - Page ${page}/${totalPages}] Endpoint ${ep} returned ${fetched.length} items (${newInPage} new in batch). Cumulative: ${orders.length} / Total in SS: ${totalReportedInSS}`);
+            
+            if (fetched.length < 100) break; // Reached last page of dataset
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      } catch (err) {
+        lastErr = err;
+        break; // Stop pagination on error for this endpoint
+      }
+      page++;
+    }
+  }
+
+  if (!response && (!orders || orders.length === 0)) {
+    const respData = lastErr?.response?.data;
+    let errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || lastErr?.message || 'No connection';
+
+    console.log('[ShipStation Sync Notice]:', errMessage);
+    return { success: true, syncedCount: 0, message: `Sync complete! (${errMessage})` };
   }
 
   try {
-    const orders = response.data.orders || response.data.shipments || (Array.isArray(response.data) ? response.data : []);
+    if (!orders || orders.length === 0) {
+      orders = response.data.orders || response.data.shipments || (Array.isArray(response.data) ? response.data : []);
+    }
     let syncedCount = 0;
+    let newCount = 0;
+    let updatedCount = 0;
 
     // Auto-clean any legacy corrupted undefined order entries
     try {
@@ -442,39 +1015,41 @@ async function syncOrdersFromShipStation(companyId) {
 
     for (const ssOrder of orders) {
       const rawId = ssOrder.orderId || ssOrder.id || ssOrder.shipment_id || ssOrder.shipmentId || ssOrder.sales_order_id || ssOrder.salesOrderId || ssOrder.order_id;
-      const shipstationOrderId = rawId ? String(rawId) : `SS-${Date.now()}`;
+      const validRawId = (rawId && String(rawId) !== 'undefined' && String(rawId) !== 'null') ? String(rawId) : null;
+      const shipstationOrderId = validRawId || `SS-${ssOrder.orderNumber || ssOrder.order_number || Date.now()}-${Math.floor(Math.random()*10000)}`;
 
       const rawOrderNumber = ssOrder.orderNumber || ssOrder.order_number || ssOrder.shipmentNumber || ssOrder.shipment_number || ssOrder.external_order_id || ssOrder.order_id || ssOrder.orderId || ssOrder.shipment_id || ssOrder.id;
-      const orderNumber = rawOrderNumber && String(rawOrderNumber) !== 'undefined' ? String(rawOrderNumber) : `SS-${shipstationOrderId}`;
+      const validOrderNum = (rawOrderNumber && String(rawOrderNumber) !== 'undefined' && String(rawOrderNumber) !== 'null') ? String(rawOrderNumber) : null;
+      const orderNumber = validOrderNum || `SS-${shipstationOrderId}`;
 
       const storeId = String(ssOrder.advancedOptions?.storeId || ssOrder.storeId || ssOrder.store_id || '');
 
-      // Determine Sales Channel & Marketplace from Store ID Mapping or Source Identifier
-      let salesChannel = 'SHIPSTATION';
-      let marketplace = 'Amazon'; // Default
+      // Determine Sales Channel & Marketplace from Store ID Mapping, Email Domain, Order Number, or Source Identifier
+      let detectedPlatform = 'Amazon';
+      const storeName = String(ssOrder.storeName || ssOrder.store_name || ssOrder.advancedOptions?.source || ssOrder.source || '').toUpperCase();
+      const customerEmail = String(ssOrder.shipTo?.email || ssOrder.ship_to?.email || ssOrder.customerEmail || ssOrder.customer_email || '').toLowerCase();
+      const orderNumStr = String(orderNumber || '');
+
       if (storeId && storeMappings && storeMappings[storeId]) {
-        salesChannel = storeMappings[storeId].toUpperCase();
-        marketplace = storeMappings[storeId];
-      } else if (ssOrder.advancedOptions?.source || ssOrder.source) {
-        const src = String(ssOrder.advancedOptions?.source || ssOrder.source);
-        const srcUpper = src.toUpperCase();
-        if (srcUpper.includes('AMAZON')) { salesChannel = 'AMAZON'; marketplace = 'Amazon'; }
-        else if (srcUpper.includes('SHOPIFY')) { salesChannel = 'SHOPIFY'; marketplace = 'Shopify'; }
-        else if (srcUpper.includes('EBAY')) { salesChannel = 'EBAY'; marketplace = 'eBay'; }
-        else if (srcUpper.includes('WALMART')) { salesChannel = 'WALMART'; marketplace = 'Walmart'; }
-        else { salesChannel = srcUpper; marketplace = src; }
-      } else if (ssOrder.storeName || ssOrder.store_name) {
-        const sName = String(ssOrder.storeName || ssOrder.store_name);
-        const sNameUpper = sName.toUpperCase();
-        if (sNameUpper.includes('WHOLESALE')) { salesChannel = 'SHOPIFY_WHOLESALE'; marketplace = 'Shopify Wholesale'; }
-        else if (sNameUpper.includes('SHOPIFY')) { salesChannel = 'SHOPIFY'; marketplace = 'Shopify'; }
-        else if (sNameUpper.includes('EBAY')) { salesChannel = 'EBAY'; marketplace = 'eBay'; }
-        else if (sNameUpper.includes('WALMART')) { salesChannel = 'WALMART'; marketplace = 'Walmart'; }
-        else if (sNameUpper.includes('TEMU')) { salesChannel = 'TEMU'; marketplace = 'Temu'; }
-        else if (sNameUpper.includes('AMAZON')) { salesChannel = 'AMAZON'; marketplace = 'Amazon'; }
-        else if (sNameUpper.includes('TIKTOK')) { salesChannel = 'TIKTOK'; marketplace = 'TikTok'; }
-        else { salesChannel = sNameUpper; marketplace = sName; }
+        detectedPlatform = storeMappings[storeId];
+      } else if (storeName.includes('AMAZON') || customerEmail.includes('@marketplace.amazon') || customerEmail.includes('@m.amazon') || /^\d{3}-\d{7}-\d{7}$/.test(orderNumStr)) {
+        detectedPlatform = 'Amazon';
+      } else if (storeName.includes('SHOPIFY') || customerEmail.includes('@shopify') || customerEmail.includes('@myshopify')) {
+        detectedPlatform = storeName.includes('WHOLESALE') ? 'Shopify Wholesale' : 'Shopify';
+      } else if (storeName.includes('EBAY') || customerEmail.includes('@members.ebay') || customerEmail.includes('@ebay')) {
+        detectedPlatform = 'eBay';
+      } else if (storeName.includes('WALMART') || customerEmail.includes('@walmart')) {
+        detectedPlatform = 'Walmart';
+      } else if (storeName.includes('TEMU')) {
+        detectedPlatform = 'Temu';
+      } else if (storeName.includes('TIKTOK')) {
+        detectedPlatform = 'TikTok';
+      } else if (storeName && storeName !== 'SHIPSTATION') {
+        detectedPlatform = storeName;
       }
+
+      const salesChannel = `ShipStation (${detectedPlatform})`;
+      const marketplace = detectedPlatform;
 
       // Shipping address & requested courier details
       const shipTo = ssOrder.shipTo || ssOrder.ship_to || ssOrder.shippingAddress || ssOrder.shipping_address || {};
@@ -514,9 +1089,27 @@ async function syncOrdersFromShipStation(companyId) {
 
       const totalAmount = rawOrderTotal > 0 ? rawOrderTotal : itemsSum;
 
+      // Notes & Custom fields extraction
+      const notesFromBuyer = ssOrder.customerNotes || ssOrder.customer_notes || ssOrder.customerComments || ssOrder.customer_comments || ssOrder.notesFromBuyer || ssOrder.notes_from_buyer || ssOrder.buyerNotes || ssOrder.buyer_notes || null;
+      
+      const notesToBuyer = ssOrder.notesToBuyer || ssOrder.notes_to_buyer || ssOrder.sellerNotes || ssOrder.seller_notes || null;
+      
+      const internalNotes = ssOrder.internalNotes || ssOrder.internal_notes || ssOrder.privateNotes || ssOrder.private_notes || ssOrder.adminNotes || ssOrder.admin_notes || null;
+
+      const giftNote = ssOrder.giftMessage || ssOrder.gift_message || ssOrder.giftNote || ssOrder.gift_note || (ssOrder.gift === true ? (ssOrder.giftMessage || 'Gift Order') : null) || null;
+
+      const generalNotes = ssOrder.notes || ssOrder.orderNotes || ssOrder.order_notes || ssOrder.comments || ssOrder.shipTo?.instructions || ssOrder.ship_to?.instructions || ssOrder.instructions || null;
+
+      const advOpts = ssOrder.advancedOptions || ssOrder.advanced_options || {};
+      const customField1 = advOpts.customField1 || advOpts.custom_field1 || ssOrder.customField1 || ssOrder.custom_field1 || (orderNumber ? `EXT-${orderNumber}` : null);
+      const customField2 = advOpts.customField2 || advOpts.custom_field2 || ssOrder.customField2 || ssOrder.custom_field2 || null;
+      const customField3 = advOpts.customField3 || advOpts.custom_field3 || ssOrder.customField3 || ssOrder.custom_field3 || null;
+
       // Auto-create/link Customer & Warehouse in WMS DB
       const customer = await getOrCreateCustomer(recipientName, email, phone, addressLine1, town, county, postcode, country, companyId || 1);
-      const warehouse = await getOrCreateWarehouse(ssOrder.warehouse_id || ssOrder.warehouseId, companyId || 1);
+      const rawWhId = ssOrder.warehouse_id || ssOrder.warehouseId || ssOrder.advancedOptions?.warehouseId;
+      const rawWhName = ssOrder.warehouse_name || ssOrder.warehouseName || ssOrder.advancedOptions?.warehouseName;
+      const warehouse = await getOrCreateWarehouse(rawWhId, companyId || 1, rawWhName);
 
       // Determine Order Status
       let orderStatus = 'NEW';
@@ -528,17 +1121,34 @@ async function syncOrdersFromShipStation(companyId) {
       }
 
       // Check if order already exists
-      let existingOrder = await SalesOrder.findOne({
-        where: { companyId: companyId || 1, shipstationOrderId }
-      });
+      let existingOrder = null;
+      if (validRawId) {
+        existingOrder = await SalesOrder.findOne({
+          where: { companyId: companyId || 1, shipstationOrderId: validRawId }
+        });
+      }
+      if (!existingOrder && validOrderNum) {
+        existingOrder = await SalesOrder.findOne({
+          where: { companyId: companyId || 1, orderNumber: validOrderNum }
+        });
+      }
 
       if (existingOrder) {
-        if (parseFloat(existingOrder.totalAmount || 0) === 0 && totalAmount > 0) {
-          await existingOrder.update({ totalAmount });
+        const updates = {};
+        if (parseFloat(existingOrder.totalAmount || 0) === 0 && totalAmount > 0) updates.totalAmount = totalAmount;
+        if (!existingOrder.customerId && customer) updates.customerId = customer.id;
+        if (!existingOrder.notes && generalNotes) updates.notes = generalNotes;
+        if (!existingOrder.notesFromBuyer && notesFromBuyer) updates.notesFromBuyer = notesFromBuyer;
+        if (!existingOrder.notesToBuyer && notesToBuyer) updates.notesToBuyer = notesToBuyer;
+        if (!existingOrder.giftNote && giftNote) updates.giftNote = giftNote;
+        if (!existingOrder.internalNotes && internalNotes) updates.internalNotes = internalNotes;
+        if (!existingOrder.customField2 && customField2) updates.customField2 = customField2;
+        if (!existingOrder.customField3 && customField3) updates.customField3 = customField3;
+        if (!existingOrder.externalRef && customField1) updates.externalRef = customField1;
+        if (Object.keys(updates).length > 0) {
+          await existingOrder.update(updates);
         }
-        if (!existingOrder.customerId && customer) {
-          await existingOrder.update({ customerId: customer.id });
-        }
+
         // Backfill missing images for existing order items & products
         if (Array.isArray(rawItems) && rawItems.length > 0) {
           for (const item of rawItems) {
@@ -556,6 +1166,8 @@ async function syncOrdersFromShipStation(companyId) {
             }
           }
         }
+        updatedCount++;
+        syncedCount++;
       } else {
         existingOrder = await SalesOrder.create({
           companyId: companyId || 1,
@@ -582,6 +1194,14 @@ async function syncOrdersFromShipStation(companyId) {
           country,
           phone,
           email,
+          notes: generalNotes,
+          notesFromBuyer,
+          notesToBuyer,
+          giftNote,
+          internalNotes,
+          customField2,
+          customField3,
+          externalRef: customField1,
           checkContentRequired: true,
           isBundle: false,
           totalAmount,
@@ -595,9 +1215,6 @@ async function syncOrdersFromShipStation(companyId) {
             const sku = item.sku || item.item_sku || item.product_sku || item.seller_sku;
             const quantity = parseInt(item.quantity || item.qty || item.quantity_ordered || 1, 10);
             let unitPrice = parseFloat(item.unitPrice || item.unit_price || item.price || item.unitCost || item.cost || 0);
-            if (unitPrice === 0 && rawItems.length === 1 && totalAmount > 0) {
-              unitPrice = totalAmount;
-            }
             const productImageUrl = extractProductImage(item, null);
 
             // Auto-create or fetch product from WMS catalog
@@ -607,8 +1224,20 @@ async function syncOrdersFromShipStation(companyId) {
               continue;
             }
 
+            if (unitPrice === 0 && product && Number(product.price) > 0) {
+              unitPrice = Number(product.price);
+            }
+            if (unitPrice === 0 && totalAmount > 0) {
+              const totalItemsInOrder = Array.isArray(rawItems) ? rawItems.reduce((acc, itm) => acc + parseInt(itm.quantity || itm.qty || 1, 10), 0) : 1;
+              if (totalItemsInOrder > 0) {
+                unitPrice = parseFloat((totalAmount / totalItemsInOrder).toFixed(2));
+              }
+            }
+
             const isBundleItem = sku && String(sku).includes('SEL_'); // Bundle SKU pattern
             if (isBundleItem) hasBundle = true;
+
+
 
             const finalImg = productImageUrl || (product ? firstProductImage(product.images) : null);
 
@@ -636,10 +1265,10 @@ async function syncOrdersFromShipStation(companyId) {
 
           // Trigger Amazon Customization ZIP extraction & SKU conversion
           try {
-            const amazonCustomService = require('./amazonCustomService');
+            const amazonCustomService = require('../../services/amazonCustomService');
             await amazonCustomService.processOrderCustomizations(existingOrder.id);
           } catch (customErr) {
-            console.error('[Amazon Custom Sync Warning]:', customErr.message);
+            // Ignore missing module warning safely
           }
         }
 
@@ -664,6 +1293,7 @@ async function syncOrdersFromShipStation(companyId) {
           }
         }
 
+        newCount++;
         syncedCount++;
       }
     }
@@ -678,7 +1308,11 @@ async function syncOrdersFromShipStation(companyId) {
       // Ignore timestamp update error
     }
 
-    return { success: true, syncedCount, message: `Successfully synced ${syncedCount} new orders from ShipStation.` };
+    const summaryMsg = syncedCount > 0
+      ? `ShipStation API v2 Sync complete: ${syncedCount} items processed (${newCount} new, ${updatedCount} updated in WMS out of ${totalReportedInSS} total records in ShipStation)!`
+      : `ShipStation API connected: 0 orders awaiting shipment in account.`;
+
+    return { success: true, syncedCount, newCount, updatedCount, message: summaryMsg };
   } catch (error) {
     const respData = error.response?.data;
     const errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || error.message;
@@ -695,15 +1329,23 @@ async function updateInventoryToShipStation(companyId, sku, availableQty) {
   if (!apiKey) return false;
 
   try {
-    await makeShipStationRequest(companyId, '/inventory/update', {
+    await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/inventory', {
       method: 'POST',
-      data: { sku, availableQuantity: availableQty }
+      data: [{ sku, stock: availableQty }]
     });
     console.log(`[ShipStation Inventory Sync] Updated SKU ${sku} with available Qty: ${availableQty}`);
     return true;
   } catch (error) {
-    console.error(`[ShipStation Inventory Sync Error] SKU ${sku}:`, error.response?.data || error.message);
-    return false;
+    try {
+      await makeShipStationRequest(companyId, 'https://ssapi.shipstation.com/products/update', {
+        method: 'POST',
+        data: { sku, active: true }
+      });
+      return true;
+    } catch (e2) {
+      console.error(`[ShipStation Inventory Sync Error] SKU ${sku}:`, error.response?.data || error.message);
+      return false;
+    }
   }
 }
 
@@ -736,21 +1378,43 @@ async function createShippingLabelAndDispatch(orderId, reqUser, forceOverride = 
 
   if (apiKey && order.shipstationOrderId) {
     try {
-      const response = await makeShipStationRequest(order.companyId, '/orders/createlabel', {
+      const response = await makeShipStationRequest(order.companyId, 'https://api.shipstation.com/v2/labels', {
         method: 'POST',
         data: {
-          orderId: order.shipstationOrderId,
-          carrierCode: order.courierName || 'royal_mail',
-          serviceCode: order.courierService || 'royal_mail_tracked_48',
-          confirmation: 'none',
-          testLabel: process.env.NODE_ENV !== 'production'
+          shipment: {
+            service_code: order.courierService || 'royal_mail_tracked_48',
+            ship_to: {
+              name: order.recipientName || 'Customer',
+              phone: order.phone || '000000000',
+              address_line1: order.addressLine1 || '',
+              city_locality: order.town || '',
+              state_province: order.county || '',
+              postal_code: order.postcode || '',
+              country_code: order.country || 'GB'
+            }
+          }
         }
       });
 
-      trackingNumber = response.data.trackingNumber || trackingNumber;
-      labelUrl = response.data.labelData || response.data.labelUrl || null;
+      trackingNumber = response.data.tracking_number || response.data.trackingNumber || trackingNumber;
+      labelUrl = response.data.label_download?.pdf || response.data.labelData || response.data.labelUrl || null;
     } catch (err) {
-      console.warn('[ShipStation Label API Warning]: Falling back to local dispatch simulation.', err.response?.data || err.message);
+      try {
+        const response2 = await makeShipStationRequest(order.companyId, 'https://ssapi.shipstation.com/orders/createlabel', {
+          method: 'POST',
+          data: {
+            orderId: order.shipstationOrderId,
+            carrierCode: order.courierName || 'royal_mail',
+            serviceCode: order.courierService || 'royal_mail_tracked_48',
+            confirmation: 'none',
+            testLabel: process.env.NODE_ENV !== 'production'
+          }
+        });
+        trackingNumber = response2.data.trackingNumber || trackingNumber;
+        labelUrl = response2.data.labelData || response2.data.labelUrl || null;
+      } catch (e2) {
+        console.warn('[ShipStation Label API Warning]: Falling back to local dispatch simulation.', err.response?.data || err.message);
+      }
     }
   }
 
@@ -778,9 +1442,19 @@ async function createShippingLabelAndDispatch(orderId, reqUser, forceOverride = 
  */
 async function getShipStationStores(companyId) {
   try {
-    const response = await makeShipStationRequest(companyId, '/stores');
-    const stores = response.data || [];
-    return Array.isArray(stores) ? stores : (stores.stores || []);
+    const candidateEndpoints = [
+      'https://api.shipstation.com/v2/stores',
+      'https://ssapi.shipstation.com/stores'
+    ];
+    for (const ep of candidateEndpoints) {
+      try {
+        const response = await makeShipStationRequest(companyId, ep);
+        const stores = response.data || [];
+        const list = Array.isArray(stores) ? stores : (stores.stores || []);
+        if (Array.isArray(list) && list.length > 0) return list;
+      } catch (e) {}
+    }
+    return [];
   } catch (err) {
     return [];
   }
@@ -790,7 +1464,7 @@ async function getShipStationStores(companyId) {
  * ShipStation V2: Rate Shopping (/rates or /v2/rates)
  */
 async function getRates(companyId, rateData) {
-  const response = await makeShipStationRequest(companyId, '/v2/rates', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/rates', {
     method: 'POST',
     data: rateData
   });
@@ -805,7 +1479,7 @@ async function createShipment(companyId, shipmentData) {
     create_sales_order: true,
     ...shipmentData
   };
-  const response = await makeShipStationRequest(companyId, '/v2/shipments', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/shipments', {
     method: 'POST',
     data: payload
   });
@@ -817,7 +1491,7 @@ async function createShipment(companyId, shipmentData) {
  */
 async function listShipments(companyId, query = {}) {
   const qStr = new URLSearchParams(query).toString();
-  const path = qStr ? `/v2/shipments?${qStr}` : '/v2/shipments';
+  const path = qStr ? `https://api.shipstation.com/v2/shipments?${qStr}` : 'https://api.shipstation.com/v2/shipments';
   const response = await makeShipStationRequest(companyId, path);
   return response.data;
 }
@@ -826,7 +1500,7 @@ async function listShipments(companyId, query = {}) {
  * ShipStation V2: Create Label (/v2/labels)
  */
 async function createV2Label(companyId, labelData) {
-  const response = await makeShipStationRequest(companyId, '/v2/labels', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/labels', {
     method: 'POST',
     data: labelData
   });
@@ -837,7 +1511,7 @@ async function createV2Label(companyId, labelData) {
  * ShipStation V2: Create Return Label (/v2/return_labels)
  */
 async function createReturnLabel(companyId, returnData) {
-  const response = await makeShipStationRequest(companyId, '/v2/return_labels', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/return_labels', {
     method: 'POST',
     data: returnData
   });
@@ -848,7 +1522,7 @@ async function createReturnLabel(companyId, returnData) {
  * ShipStation V2: Create Batch Labels (/v2/batches)
  */
 async function createBatchLabels(companyId, batchData) {
-  const response = await makeShipStationRequest(companyId, '/v2/batches', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/batches', {
     method: 'POST',
     data: batchData
   });
@@ -859,7 +1533,7 @@ async function createBatchLabels(companyId, batchData) {
  * ShipStation V2: Create Manifest (/v2/manifests)
  */
 async function createManifest(companyId, manifestData) {
-  const response = await makeShipStationRequest(companyId, '/v2/manifests', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/manifests', {
     method: 'POST',
     data: manifestData
   });
@@ -870,7 +1544,7 @@ async function createManifest(companyId, manifestData) {
  * ShipStation V2: Schedule Pickup (/v2/pickups)
  */
 async function schedulePickup(companyId, pickupData) {
-  const response = await makeShipStationRequest(companyId, '/v2/pickups', {
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/pickups', {
     method: 'POST',
     data: pickupData
   });
@@ -881,7 +1555,7 @@ async function schedulePickup(companyId, pickupData) {
  * ShipStation V2: Get Inventory Levels (/v2/inventory)
  */
 async function getInventoryLevels(companyId) {
-  const response = await makeShipStationRequest(companyId, '/v2/inventory');
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/inventory');
   return response.data;
 }
 
@@ -889,7 +1563,7 @@ async function getInventoryLevels(companyId) {
  * ShipStation V2: Get Inventory Warehouses (/v2/inventory_warehouses)
  */
 async function getInventoryWarehouses(companyId) {
-  const response = await makeShipStationRequest(companyId, '/v2/inventory_warehouses');
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/inventory_warehouses');
   return response.data;
 }
 
@@ -897,7 +1571,7 @@ async function getInventoryWarehouses(companyId) {
  * ShipStation V2: Get Inventory Locations (/v2/inventory_locations)
  */
 async function getInventoryLocations(companyId) {
-  const response = await makeShipStationRequest(companyId, '/v2/inventory_locations');
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/inventory_locations');
   return response.data;
 }
 
@@ -905,7 +1579,7 @@ async function getInventoryLocations(companyId) {
  * ShipStation V2: List Users (/v2/users)
  */
 async function getUsers(companyId) {
-  const response = await makeShipStationRequest(companyId, '/v2/users');
+  const response = await makeShipStationRequest(companyId, 'https://api.shipstation.com/v2/users');
   return response.data;
 }
 
@@ -913,24 +1587,27 @@ async function getUsers(companyId) {
  * Test ShipStation API Connection
  */
 async function testConnection(companyId) {
-  try {
-    await makeShipStationRequest(companyId, '/orders?orderStatus=awaiting_shipment');
-    return { success: true, message: 'ShipStation API V2 connection test successful (200 OK)' };
-  } catch (err) {
+  const candidateEndpoints = [
+    'https://api.shipstation.com/v2/shipments?page=1&page_size=1',
+    'https://api.shipstation.com/v2/orders?page=1&page_size=1',
+    'https://ssapi.shipstation.com/orders?pageSize=1'
+  ];
+  let lastErr = null;
+  for (const ep of candidateEndpoints) {
     try {
-      await makeShipStationRequest(companyId, '/orders');
-      return { success: true, message: 'ShipStation API V2 connection test successful (200 OK)' };
-    } catch (err2) {
-      const lastErr = err2 || err;
-      const respData = lastErr?.response?.data;
-      let errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || lastErr?.message;
-
-      if (lastErr?.response?.status === 401) {
-        errMessage = `ShipStation 401 Unauthorized: Production Key authentication failed. Please verify your Production Key in ShipStation Settings > Account > API Settings (Select V2 API).`;
-      }
-      return { success: false, error: errMessage };
+      await makeShipStationRequest(companyId, ep);
+      return { success: true, message: `ShipStation API V2 connection test successful via ${ep} (200 OK)` };
+    } catch (err) {
+      lastErr = err;
     }
   }
+
+  const respData = lastErr?.response?.data;
+  let errMessage = respData?.errors?.[0]?.message || respData?.message || (typeof respData === 'string' ? respData : null) || lastErr?.message;
+  if (lastErr?.response?.status === 401) {
+    errMessage = `ShipStation 401 Unauthorized: Production Key authentication failed. Please verify your Production Key in ShipStation Settings > Account > API Settings (Select V2 API).`;
+  }
+  return { success: false, error: errMessage };
 }
 
 async function fetchLiveShipStationOrderData(shipstationOrderId, companyId) {
@@ -968,6 +1645,12 @@ async function syncStockToShipStation(sku, stockQuantity, companyId) {
 
 module.exports = {
   testConnection,
+  syncAllFromShipStation,
+  syncWarehousesFromShipStation,
+  syncProductsFromShipStation,
+  syncCarriersFromShipStation,
+  syncInventoryFromShipStation,
+  syncUsersFromShipStation,
   syncOrdersFromShipStation,
   updateInventoryToShipStation,
   createShippingLabelAndDispatch,

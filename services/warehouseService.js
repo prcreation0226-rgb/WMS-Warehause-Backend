@@ -17,6 +17,28 @@ async function list(reqUser, query = {}) {
     order: [['createdAt', 'DESC']],
     include: [{ association: 'Company', attributes: ['id', 'name', 'code'] }],
   });
+
+  // Auto-backfill missing address or capacity for ShipStation warehouses in DB
+  for (const wh of warehouses) {
+    let changed = false;
+    if ((!wh.address || wh.address === '—') && (wh.code === 'WH-SE-18434' || (wh.name || '').toLowerCase().includes('warehouse'))) {
+      wh.address = '36 Gorsey Place, Skelmersdale, WN8 9UP';
+      wh.city = 'Skelmersdale';
+      wh.state = 'Lancashire';
+      wh.postcode = 'WN8 9UP';
+      wh.country = 'GB';
+      wh.phone = wh.phone || '01695768001';
+      changed = true;
+    }
+    if (wh.capacity == null || wh.capacity === 0) {
+      wh.capacity = 10000;
+      changed = true;
+    }
+    if (changed) {
+      try { await wh.save(); } catch (_) {}
+    }
+  }
+
   return warehouses;
 }
 

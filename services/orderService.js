@@ -3,75 +3,182 @@ const { Op } = require('sequelize');
 const inventoryService = require('./inventoryService');
 
 async function list(reqUser, query = {}) {
-  const where = {};
+  const andConditions = [];
+
   if (reqUser.role === 'super_admin') {
-    if (query.companyId) where.companyId = query.companyId;
+    if (query.companyId) andConditions.push({ companyId: query.companyId });
   } else {
-    where.companyId = reqUser.companyId;
+    andConditions.push({ companyId: reqUser.companyId });
   }
 
   // Filter: Client
   if (reqUser.clientId) {
-    where.customerId = reqUser.clientId;
+    andConditions.push({ customerId: reqUser.clientId });
   } else if (query.clientId && query.clientId !== 'all') {
-    where.customerId = query.clientId;
+    andConditions.push({ customerId: query.clientId });
   }
 
   // Filter: Order Status
   if (query.status && query.status !== 'all') {
     if (typeof query.status === 'string' && query.status.includes(',')) {
-      where.status = { [Op.in]: query.status.split(',') };
+      andConditions.push({ status: { [Op.in]: query.status.split(',') } });
     } else if (Array.isArray(query.status)) {
-      where.status = { [Op.in]: query.status };
+      andConditions.push({ status: { [Op.in]: query.status } });
     } else {
-      where.status = query.status;
+      andConditions.push({ status: query.status });
     }
   }
 
   // Filter: Channel
   if (query.salesChannel && query.salesChannel !== 'all') {
-    where.salesChannel = query.salesChannel;
+    const ch = String(query.salesChannel).toUpperCase();
+    if (ch === 'MANUAL' || ch === 'MANUAL_INPUT' || ch === 'DIRECT') {
+      andConditions.push({
+        [Op.and]: [
+          {
+            [Op.or]: [
+              { salesChannel: 'MANUAL' },
+              { salesChannel: 'MANUAL_INPUT' },
+              { salesChannel: 'DIRECT' },
+              { salesChannel: 'CSV_IMPORT' },
+              { salesChannel: null },
+              { salesChannel: '' },
+              { orderNumber: { [Op.like]: 'ORD-%' } },
+              { orderNumber: { [Op.like]: 'MANUAL-%' } }
+            ]
+          },
+          { salesChannel: { [Op.notLike]: '%AMAZON%' } },
+          { salesChannel: { [Op.notLike]: '%SHOPIFY%' } },
+          { salesChannel: { [Op.notLike]: '%EBAY%' } },
+          { salesChannel: { [Op.notLike]: '%WALMART%' } },
+          { salesChannel: { [Op.notLike]: '%TEMU%' } },
+          { salesChannel: { [Op.notLike]: '%TIKTOK%' } }
+        ]
+      });
+    } else if (ch === 'AMAZON') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%AMAZON%' } },
+          { marketplace: { [Op.like]: '%AMAZON%' } },
+          { orderNumber: { [Op.like]: 'AMZ%' } },
+          { orderNumber: { [Op.regexp]: '^[0-9]{3}-[0-9]{7}-[0-9]{7}$' } },
+          { email: { [Op.like]: '%@marketplace.amazon%' } }
+        ]
+      });
+    } else if (ch === 'SHOPIFY') {
+      andConditions.push({
+        [Op.and]: [
+          {
+            [Op.or]: [
+              { salesChannel: { [Op.like]: '%SHOPIFY%' } },
+              { marketplace: { [Op.like]: '%SHOPIFY%' } },
+              { orderNumber: { [Op.like]: 'SHPF%' } },
+              { orderNumber: { [Op.like]: 'SHOPIFY%' } }
+            ]
+          },
+          { salesChannel: { [Op.notLike]: '%WHOLESALE%' } }
+        ]
+      });
+    } else if (ch === 'SHOPIFY_WHOLESALE') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%WHOLESALE%' } },
+          { marketplace: { [Op.like]: '%WHOLESALE%' } }
+        ]
+      });
+    } else if (ch === 'EBAY') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%EBAY%' } },
+          { marketplace: { [Op.like]: '%EBAY%' } },
+          { orderNumber: { [Op.like]: 'EBAY%' } },
+          { email: { [Op.like]: '%@members.ebay%' } }
+        ]
+      });
+    } else if (ch === 'WALMART') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%WALMART%' } },
+          { marketplace: { [Op.like]: '%WALMART%' } },
+          { orderNumber: { [Op.like]: 'WMT%' } },
+          { orderNumber: { [Op.like]: 'WALMART%' } },
+          { email: { [Op.like]: '%@walmart%' } }
+        ]
+      });
+    } else if (ch === 'TEMU') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%TEMU%' } },
+          { marketplace: { [Op.like]: '%TEMU%' } },
+          { orderNumber: { [Op.like]: 'TEMU%' } }
+        ]
+      });
+    } else if (ch === 'TIKTOK') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%TIKTOK%' } },
+          { marketplace: { [Op.like]: '%TIKTOK%' } },
+          { orderNumber: { [Op.like]: 'TT%' } }
+        ]
+      });
+    } else if (ch === 'SHIPSTATION') {
+      andConditions.push({
+        [Op.or]: [
+          { salesChannel: { [Op.like]: '%SHIPSTATION%' } },
+          { shipstationOrderId: { [Op.ne]: null } }
+        ]
+      });
+    } else {
+      andConditions.push({ salesChannel: { [Op.like]: `%${query.salesChannel}%` } });
+    }
   }
 
   // Filter: Courier Name
   if (query.courierName && query.courierName !== 'all') {
-    where.courierName = query.courierName;
+    andConditions.push({ courierName: { [Op.like]: `%${query.courierName}%` } });
   }
 
   // Filter: Courier Service
   if (query.courierService && query.courierService !== 'all') {
-    where.courierService = query.courierService;
+    andConditions.push({ courierService: { [Op.like]: `%${query.courierService}%` } });
   }
 
   // Filter: Dates
   const dateField = query.useRequiredDespatch === 'true' ? 'requiredDespatchDate' : 'orderDate';
-  if (query.startDate || query.endDate) {
+  const validStart = (query.startDate && query.startDate !== 'undefined' && query.startDate !== 'null') ? query.startDate : null;
+  const validEnd = (query.endDate && query.endDate !== 'undefined' && query.endDate !== 'null') ? query.endDate : null;
+
+  if (validStart || validEnd) {
     const dateCond = {};
-    if (query.startDate) dateCond[Op.gte] = query.startDate;
-    if (query.endDate) dateCond[Op.lte] = query.endDate;
-    where[dateField] = dateCond;
+    if (validStart) dateCond[Op.gte] = validStart;
+    if (validEnd) dateCond[Op.lte] = validEnd;
+    andConditions.push({ [dateField]: dateCond });
   }
 
-  // Search filter (SKU, postcode, customer name, order number, recipient, town, billing/shipping address)
-  if (query.search) {
-    const searchVal = `%${query.search}%`;
-    where[Op.or] = [
-      { orderNumber: { [Op.like]: searchVal } },
-      { recipientName: { [Op.like]: searchVal } },
-      { addressLine1: { [Op.like]: searchVal } },
-      { town: { [Op.like]: searchVal } },
-      { postcode: { [Op.like]: searchVal } },
-      { country: { [Op.like]: searchVal } },
-      { externalRef: { [Op.like]: searchVal } },
-      { tags: { [Op.like]: searchVal } },
-      { '$Client.name$': { [Op.like]: searchVal } },
-      { '$Client.address$': { [Op.like]: searchVal } },
-      { '$Client.city$': { [Op.like]: searchVal } },
-      { '$Client.postcode$': { [Op.like]: searchVal } },
-      { '$OrderItems.Product.sku$': { [Op.like]: searchVal } },
-      { '$OrderItems.Product.name$': { [Op.like]: searchVal } }
-    ];
+  // Search filter
+  if (query.search && String(query.search).trim() !== '') {
+    const searchVal = `%${query.search.trim()}%`;
+    andConditions.push({
+      [Op.or]: [
+        { orderNumber: { [Op.like]: searchVal } },
+        { recipientName: { [Op.like]: searchVal } },
+        { addressLine1: { [Op.like]: searchVal } },
+        { town: { [Op.like]: searchVal } },
+        { postcode: { [Op.like]: searchVal } },
+        { country: { [Op.like]: searchVal } },
+        { externalRef: { [Op.like]: searchVal } },
+        { tags: { [Op.like]: searchVal } },
+        { '$Client.name$': { [Op.like]: searchVal } },
+        { '$Client.address$': { [Op.like]: searchVal } },
+        { '$Client.city$': { [Op.like]: searchVal } },
+        { '$Client.postcode$': { [Op.like]: searchVal } },
+        { '$OrderItems.Product.sku$': { [Op.like]: searchVal } },
+        { '$OrderItems.Product.name$': { [Op.like]: searchVal } }
+      ]
+    });
   }
+
+  const where = andConditions.length > 0 ? { [Op.and]: andConditions } : {};
 
   // Pagination
   const page = parseInt(query.page, 10) || 1;
@@ -82,7 +189,11 @@ async function list(reqUser, query = {}) {
   const orderIdsResult = await SalesOrder.findAll({
     where,
     attributes: ['id'],
-    order: [['id', 'DESC']],
+    order: [
+      ['orderDate', 'DESC'],
+      ['createdAt', 'DESC'],
+      ['id', 'DESC']
+    ],
     subQuery: false,
     distinct: true,
     include: [
@@ -129,7 +240,11 @@ async function list(reqUser, query = {}) {
   // 2. Fetch full associated details for the page's order IDs
   const rows = await SalesOrder.findAll({
     where: { id: { [Op.in]: ids } },
-    order: [['id', 'DESC']],
+    order: [
+      ['orderDate', 'DESC'],
+      ['createdAt', 'DESC'],
+      ['id', 'DESC']
+    ],
     include: [
       { association: 'Company', attributes: ['id', 'name', 'code'] },
       { association: 'Client', attributes: ['id', 'name', 'code', 'email', 'phone', 'contactPerson', 'address', 'city', 'state', 'country', 'postcode', 'header_image_url'] },
@@ -147,8 +262,12 @@ async function list(reqUser, query = {}) {
     ]
   });
 
+  // Preserve exact sorted order of ids from step 1
+  const rowsMap = new Map(rows.map(r => [r.id, r]));
+  const orderedRows = ids.map(id => rowsMap.get(id)).filter(Boolean);
+
   return {
-    items: rows.map((o) => o.get({ plain: true })),
+    items: orderedRows.map((o) => o.get({ plain: true })),
     total: totalCount,
     page,
     pageSize: limit
@@ -171,8 +290,11 @@ async function getById(id, reqUser) {
 
   const orderJson = order.get({ plain: true });
 
-  // Map productImageUrl fallback from Product.images
+  // Map productImageUrl fallback from Product.images and calculate unitPrice if 0
   if (Array.isArray(orderJson.OrderItems)) {
+    const totalOrderItemsCount = orderJson.OrderItems.reduce((acc, it) => acc + (Number(it.quantity) || 1), 0);
+    const orderTotal = Number(orderJson.totalAmount) || 0;
+
     orderJson.OrderItems = orderJson.OrderItems.map(item => {
       let img = item.productImageUrl || item.product_image_url || item.imageUrl || item.image_url;
       if (!img && item.Product) {
@@ -194,8 +316,24 @@ async function getById(id, reqUser) {
           }
         }
       }
+
+      let price = Number(item.unitPrice) || 0;
+      if (price === 0) {
+        if (item.Product && Number(item.Product.price) > 0) {
+          price = Number(item.Product.price);
+        } else if (orderTotal > 0 && totalOrderItemsCount > 0) {
+          price = parseFloat((orderTotal / totalOrderItemsCount).toFixed(2));
+        }
+        // Auto-persist calculated unitPrice
+        try {
+          const { OrderItem } = require('../models');
+          OrderItem.update({ unitPrice: price }, { where: { id: item.id } });
+        } catch (_) {}
+      }
+
       return {
         ...item,
+        unitPrice: price,
         productImageUrl: img || null
       };
     });
@@ -1854,6 +1992,8 @@ async function syncReservations(reqUser) {
   };
 }
 
+// Service helper functions below
+
 /**
  * Sync reservations for a single product in a single warehouse.
  * Fast, target-specific recalculation after stock levels change.
@@ -1986,5 +2126,33 @@ async function updateNotes(id, data, reqUser) {
   return getById(id, reqUser);
 }
 
-module.exports = { list, getById, create, update, updateNotes, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf, syncReservations, syncReservationsForProduct, markAsPrinted };
+// Auto-backfill real marketplace names on legacy ShipStation sales orders
+(async () => {
+  try {
+    const { sequelize } = require('../config/db');
+    // 1. Shopify backfill (Every SHPF- order is 100% Shopify)
+    await sequelize.query(`
+      UPDATE sales_orders 
+      SET sales_channel = 'ShipStation (Shopify)', marketplace = 'Shopify' 
+      WHERE order_number LIKE 'SHPF-%' OR order_number LIKE 'SHOPIFY-%';
+    `);
+    // 2. Amazon backfill (Amazon order ID pattern or Amazon email)
+    await sequelize.query(`
+      UPDATE sales_orders 
+      SET sales_channel = 'ShipStation (Amazon)', marketplace = 'Amazon' 
+      WHERE (order_number REGEXP '^[0-9]{3}-[0-9]{7}-[0-9]{7}$' OR email LIKE '%@marketplace.amazon%' OR email LIKE '%@m.amazon%')
+        AND order_number NOT LIKE 'SHPF-%';
+    `);
+    // 3. eBay backfill
+    await sequelize.query(`
+      UPDATE sales_orders 
+      SET sales_channel = 'ShipStation (eBay)', marketplace = 'eBay' 
+      WHERE (order_number LIKE 'EBAY-%' OR email LIKE '%@members.ebay%')
+        AND order_number NOT LIKE 'SHPF-%';
+    `);
+  } catch (e) {
+    // Ignore migration warning
+  }
+})();
 
+module.exports = { list, getById, create, update, updateNotes, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf, syncReservations, syncReservationsForProduct, markAsPrinted };

@@ -9,6 +9,7 @@ const {
   Customer,
   InventoryLog,
   Company,
+  sequelize
 } = require('../models');
 const { Op } = require('sequelize');
 
@@ -138,13 +139,21 @@ async function stats(req, res, next) {
       totalStock = await ProductStock.sum('quantity') || 0;
     }
 
-    // Low stock count
+    // Low stock count (Optimized Aggregate Query)
     let lowStockCount = 0;
     if (companyId && whIds.length > 0) {
-      const products = await Product.findAll({ where: { ...baseWhere, status: 'ACTIVE' }, attributes: ['id', 'reorderLevel'] });
+      const stockSums = await ProductStock.findAll({
+        attributes: ['productId', [sequelize.fn('SUM', sequelize.col('quantity')), 'totalQty']],
+        where: { warehouseId: { [Op.in]: whIds } },
+        group: ['productId'],
+        raw: true
+      });
+      const stockMap = {};
+      stockSums.forEach(s => { stockMap[s.productId] = Number(s.totalQty) || 0; });
+
+      const products = await Product.findAll({ where: { ...baseWhere, status: 'ACTIVE' }, attributes: ['id', 'reorderLevel'], raw: true });
       for (const p of products) {
-        const sum = await ProductStock.sum('quantity', { where: { productId: p.id, warehouseId: { [Op.in]: whIds } } });
-        if ((sum || 0) < (p.reorderLevel || 0)) lowStockCount += 1;
+        if ((stockMap[p.id] || 0) < (p.reorderLevel || 0)) lowStockCount += 1;
       }
     }
 
@@ -445,15 +454,24 @@ async function notifications(req, res, next) {
     if (companyId) {
       // Common for admin/manager/inventory
       if (['company_admin', 'inventory_manager', 'warehouse_manager'].includes(user.role)) {
-        // Low Stock
-        const products = await Product.findAll({ where: { companyId, status: 'ACTIVE' }, attributes: ['id', 'name', 'reorderLevel'] });
-        const whs = await Warehouse.findAll({ where: { companyId }, attributes: ['id'] });
+        // Low Stock (Optimized Aggregate Query)
+        const products = await Product.findAll({ where: { companyId, status: 'ACTIVE' }, attributes: ['id', 'name', 'reorderLevel'], raw: true });
+        const whs = await Warehouse.findAll({ where: { companyId }, attributes: ['id'], raw: true });
         const whIds = whs.map(w => w.id);
         
         let lowStockCount = 0;
-        for (const p of products) {
-          const sum = await ProductStock.sum('quantity', { where: { productId: p.id, warehouseId: { [Op.in]: whIds } } });
-          if ((sum || 0) < (p.reorderLevel || 0)) lowStockCount++;
+        if (whIds.length > 0) {
+          const stockSums = await ProductStock.findAll({
+            attributes: ['productId', [sequelize.fn('SUM', sequelize.col('quantity')), 'totalQty']],
+            where: { warehouseId: { [Op.in]: whIds } },
+            group: ['productId'],
+            raw: true
+          });
+          const stockMap = {};
+          stockSums.forEach(s => { stockMap[s.productId] = Number(s.totalQty) || 0; });
+          for (const p of products) {
+            if ((stockMap[p.id] || 0) < (p.reorderLevel || 0)) lowStockCount++;
+          }
         }
         if (lowStockCount > 0) {
           alerts.push({ id: 'low-stock', title: 'Low Stock Alert', message: `${lowStockCount} items are below reorder level.`, type: 'warning', link: '/inventory' });
